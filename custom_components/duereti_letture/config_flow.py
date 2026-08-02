@@ -216,6 +216,13 @@ class DuretiOptionsFlow(config_entries.OptionsFlow):
                 pods.append({"pod": user_input["pod"], "df": user_input["df"]})
                 new_data = {**self.config_entry.data, CONF_PODS: pods}
                 self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+                # Reload mirato solo qui: serve perché il coordinator riprenda
+                # la lista POD aggiornata e sensor.py crei le entità per il
+                # nuovo POD. Non è un listener generico: non scatta per le
+                # scritture interne del coordinator (es. flag di backfill),
+                # che altrimenti causerebbero un reload indesiderato ogni
+                # volta che il backfill iniziale si completa.
+                await self.hass.config_entries.async_reload(self.config_entry.entry_id)
                 return self.async_create_entry(title="", data={})
 
         return self.async_show_form(
@@ -249,6 +256,9 @@ class DuretiOptionsFlow(config_entries.OptionsFlow):
             pods_rimasti = [p for p in pods if p["pod"] not in da_rimuovere]
             new_data = {**self.config_entry.data, CONF_PODS: pods_rimasti}
             self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+            # Stesso motivo del reload in async_step_aggiungi_pod: serve solo
+            # qui, non come listener generico sulla entry.
+            await self.hass.config_entries.async_reload(self.config_entry.entry_id)
             return self.async_create_entry(title="", data={})
 
         return self.async_show_form(step_id="rimuovi_pod", data_schema=self._schema_rimuovi(pods))
