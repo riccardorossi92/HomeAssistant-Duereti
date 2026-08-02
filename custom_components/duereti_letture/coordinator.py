@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -97,6 +97,27 @@ class DuretiCoordinator(DataUpdateCoordinator):
         self._ultima_richiesta: str | None = None  # chiave del periodo già richiesto
         self.pending_since: datetime | None = None  # per il sensore di stato/attesa
         self.pending_ticket: str | None = None
+
+        # Se la entry viene smontata (reload, riavvio, rimozione) mentre il
+        # polling in background è a metà, lo cancelliamo invece di lasciarlo
+        # orfano. Non perdiamo nulla: il ticket è già persistito sulla entry
+        # (vedi _async_update_data), quindi la prossima istanza del
+        # coordinator lo riprende comunque in modo pulito.
+        entry.async_on_unload(self._annulla_task_in_background)
+
+    @callback
+    def _annulla_task_in_background(self) -> None:
+        """Cancella il polling in corso quando la entry viene smontata.
+
+        Sicuro da fare: il ticket è già persistito su self._entry.data prima
+        che questo task venisse creato, quindi non si perde nulla - una
+        nuova istanza del coordinator lo riprenderà al prossimo setup.
+        """
+        if self._background_task and not self._background_task.done():
+            _LOGGER.debug(
+                "Smontaggio della entry: annullo il polling in background ancora in corso"
+            )
+            self._background_task.cancel()
 
     async def _async_update_data(self) -> dict:
         if self._background_task and not self._background_task.done():
