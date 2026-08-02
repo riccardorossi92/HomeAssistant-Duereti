@@ -1,0 +1,71 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Duereti - Credenziali API",
+        "description": "Per sapere come richiedere Client ID e Secret ID a Duereti, consulta: {github_repo_url}",
+        "data": {
+          "client_id": "Client ID",
+          "secret_id": "Secret ID"
+        }
+      },
+      "add_pod": {
+        "title": "Duereti - Aggiungi POD",
+        "data": {
+          "pod": "Codice POD/PDR",
+          "df": "Dato fiscale associato (CF o P.IVA)",
+          "aggiungi_altro": "Aggiungi un altro POD"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Duereti - Aggiorna credenziali",
+        "description": "Le credenziali salvate non sono più valide. Inserisci un nuovo Client ID/Secret ID (info: {github_repo_url})",
+        "data": {
+          "client_id": "Client ID",
+          "secret_id": "Secret ID"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Client ID o Secret ID non validi",
+      "cannot_connect": "Impossibile contattare le API Duereti",
+      "pod_duplicato": "Questo POD è già configurato in: {pod_conflitto}"
+    },
+    "abort": {
+      "reauth_successful": "Credenziali aggiornate con successo"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Gestisci POD",
+        "menu_options": {
+          "aggiungi_pod": "Aggiungi un POD",
+          "rimuovi_pod": "Rimuovi un POD"
+        }
+      },
+      "aggiungi_pod": {
+        "title": "Aggiungi POD",
+        "description": "POD attualmente configurati: {pod_correnti}",
+        "data": {
+          "pod": "Codice POD/PDR",
+          "df": "Dato fiscale associato (CF o P.IVA)"
+        }
+      },
+      "rimuovi_pod": {
+        "title": "Rimuovi POD",
+        "description": "Seleziona i POD da rimuovere. I dati storici già importati nelle statistiche esterne non vengono cancellati.",
+        "data": {
+          "pods_da_rimuovere": "POD da rimuovere"
+        }
+      }
+    },
+    "error": {
+      "pod_duplicato": "Questo POD è già configurato in: {pod_conflitto}",
+      "non_puoi_rimuoverli_tutti": "Non puoi rimuovere tutti i POD da qui: rimuovi direttamente l'integrazione se vuoi svuotarla del tutto"
+    },
+    "abort": {
+      "nessun_pod": "Non ci sono POD configurati da rimuovere"
+    }
+  }
+}
