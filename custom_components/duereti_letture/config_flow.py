@@ -174,15 +174,18 @@ class DuretiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
-        return DuretiOptionsFlow(config_entry)
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> "DuretiOptionsFlow":
+        return DuretiOptionsFlow()
 
 
 class DuretiOptionsFlow(config_entries.OptionsFlow):
-    """Permette di aggiungere/rimuovere POD dopo la configurazione iniziale."""
+    """Permette di aggiungere/rimuovere POD dopo la configurazione iniziale.
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+    Non serve un __init__ che salva config_entry: dalle versioni recenti di
+    Home Assistant, self.config_entry è già fornito automaticamente dalla
+    classe base ed è di sola lettura (assegnarlo a mano causa AttributeError:
+    'property config_entry has no setter').
+    """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

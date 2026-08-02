@@ -109,6 +109,14 @@ Il caso "file non ancora pronto" è invece un HTTP 200 con
 `{"esito":1, "message":"Il file non è ancora disponibile"}` — non è un errore,
 è lo stato normale mentre il job è in coda.
 
+## Icona/logo
+
+Per far comparire il logo Duereti in HACS e nell'interfaccia HA, metti i file
+richiesti dentro `custom_components/duereti_letture/brand/` (vedi il
+`README.md` in quella cartella per i dettagli). Funziona da Home Assistant
+2026.3 in poi; su versioni precedenti l'integrazione funziona comunque, solo
+senza icona personalizzata.
+
 ## Sviluppo e test
 
 ```bash
