@@ -19,6 +19,13 @@ URL_REQUEST_RESULT = f"{BASE_URL}/requestResult"
 TOKEN_VALIDITY_SECONDS = 600
 TOKEN_SAFETY_MARGIN_SECONDS = 15
 
+# Retry per il conflitto 409 su requestToken quando non c'è un token in cache
+# da riusare (tipicamente: riavvio/reload di HA entro i 10 minuti di validità
+# di un token precedente). Attesa breve apposta per non far scattare il
+# timeout di setup di Home Assistant.
+RIAVVIO_RETRY_ATTEMPTS = 3
+RIAVVIO_RETRY_WAIT_SECONDS = 20
+
 MODE_CURVE = "CURVE"
 MODE_LETTURE = "LETTURE"
 
