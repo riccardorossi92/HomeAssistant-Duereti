@@ -21,6 +21,8 @@ from .const import (
     MODE_CURVE,
     RESULT_POLL_INTERVAL_SECONDS,
     RESULT_POLL_MAX_ATTEMPTS,
+    RIAVVIO_RETRY_ATTEMPTS,
+    RIAVVIO_RETRY_WAIT_SECONDS,
     TOKEN_SAFETY_MARGIN_SECONDS,
     TOKEN_VALIDITY_SECONDS,
     URL_REQUEST_EXPORT,
@@ -102,27 +104,58 @@ class DuretiApiClient:
 
         Il manuale documenta un 409 CONFLICT quando si richiede un token
         mentre uno precedente è ancora attivo lato server (il token esistente
-        viene "restituito nel messaggio"): in quel caso proviamo a riusare
-        quello che avevamo già in cache invece di fallire.
+        viene "restituito nel messaggio"): se abbiamo quel token in cache lo
+        riusiamo.
+
+        C'è però un caso in cui la cache è vuota pur essendoci un token
+        ancora attivo lato server: un riavvio/reload di Home Assistant entro
+        i 10 minuti di validità del token precedente. La nuova istanza di
+        DuretiApiClient parte senza memoria di quel token, quindi non ha
+        nulla da riusare quando arriva il 409. In questo caso specifico
+        ritentiamo un numero limitato di volte con una breve attesa: spesso
+        il conflitto si risolve comunque in pochi secondi/minuti, e non
+        vogliamo bloccare il setup dell'integrazione abbastanza a lungo da
+        far scattare il timeout di Home Assistant (che è sull'ordine dei
+        minuti, non dei secondi).
         """
         now = time.monotonic()
         if not force_refresh and self._token and now < self._token_expiry:
             return self._token
 
         payload = {"clientId": self._client_id, "secretId": self._secret_id}
-        try:
-            async with self._session.post(URL_REQUEST_TOKEN, json=payload) as resp:
-                data = await self._json_or_raise(resp)
-        except DuretiConflictError:
-            if self._token:
+
+        for tentativo in range(1, RIAVVIO_RETRY_ATTEMPTS + 1):
+            try:
+                async with self._session.post(URL_REQUEST_TOKEN, json=payload) as resp:
+                    data = await self._json_or_raise(resp)
+                break
+            except DuretiConflictError:
+                if self._token:
+                    _LOGGER.debug(
+                        "requestToken in conflitto (409): il token precedente è ancora attivo, lo riuso"
+                    )
+                    # Non conosciamo la scadenza esatta residua: prudenzialmente
+                    # concediamo un margine più ampio prima del prossimo tentativo.
+                    self._token_expiry = now + TOKEN_SAFETY_MARGIN_SECONDS
+                    return self._token
+
+                if tentativo == RIAVVIO_RETRY_ATTEMPTS:
+                    _LOGGER.warning(
+                        "requestToken in conflitto (409) senza token in cache dopo %d tentativi: "
+                        "probabile riavvio/reload avvenuto entro i 10 minuti di validità di un "
+                        "token precedente. Non è un blocco del WAF: si risolverà da solo appena "
+                        "quel token scade lato server (Home Assistant ritenterà automaticamente).",
+                        RIAVVIO_RETRY_ATTEMPTS,
+                    )
+                    raise
                 _LOGGER.debug(
-                    "requestToken in conflitto (409): il token precedente è ancora attivo, lo riuso"
+                    "requestToken in conflitto (409) senza token in cache (probabile riavvio "
+                    "recente), ritento tra %ds (tentativo %d/%d)",
+                    RIAVVIO_RETRY_WAIT_SECONDS,
+                    tentativo,
+                    RIAVVIO_RETRY_ATTEMPTS,
                 )
-                # Non conosciamo la scadenza esatta residua: prudenzialmente
-                # concediamo un margine più ampio prima del prossimo tentativo.
-                self._token_expiry = now + TOKEN_SAFETY_MARGIN_SECONDS
-                return self._token
-            raise
+                await asyncio.sleep(RIAVVIO_RETRY_WAIT_SECONDS)
 
         if data.get("esito") != ESITO_OK:
             raise DuretiAuthError(data.get("message") or "Autenticazione fallita")
