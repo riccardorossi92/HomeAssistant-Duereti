@@ -8,6 +8,15 @@ CONF_PODS = "pods"  # lista di dict: {"pod": "IT001...", "df": "RSSMRA..."} - df
 CONF_MODE = "mode"  # "CURVE" o "LETTURE"
 CONF_BACKFILL_DONE = "backfill_done"  # True dopo l'iniezione iniziale dei 6 mesi precedenti
 
+# Ticket requestExport in sospeso, salvato sulla config entry (sopravvive ai
+# reload/riavvii) così un reload non perde di vista un ticket già ottenuto
+# da Duereti - altrimenti si rischia di rifare requestExport da capo mentre
+# quello precedente sta ancora venendo processato lato loro.
+CONF_PENDING_TICKET = "pending_ticket"
+CONF_PENDING_DATA_DA = "pending_data_da"
+CONF_PENDING_DATA_A = "pending_data_a"
+CONF_PENDING_IS_BACKFILL = "pending_is_backfill"
+
 BASE_URL = "https://areaclienti.duereti.it/ClientiDueRetiWeb/public/misure"
 URL_REQUEST_TOKEN = f"{BASE_URL}/requestToken"
 URL_REQUEST_EXPORT = f"{BASE_URL}/requestExport"
