@@ -1,5 +1,10 @@
 # HomeAssistant-Duereti
 
+Unofficial integration for Duereti electricity distributor data in Home Assistant
+
+Disclaimer: This is an unofficial integration and is not affiliated with or endorsed by Duereti in any way.
+Custom integration for Home Assistant to import electricity meter curve data from Duereti (Italian electricity distributor) through their public PCF API.
+
 Integrazione per Home Assistant che scarica automaticamente le curve di
 scambio/produzione (o le letture) del tuo POD da Duereti tramite le API
 pubbliche del Portale Clienti Finali (PCF), e le importa come statistiche
