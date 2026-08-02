@@ -13,7 +13,16 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import DuretiApiClient, DuretiApiError, DuretiAuthError
-from .const import CONF_BACKFILL_DONE, DEFAULT_SCAN_INTERVAL_HOURS, DOMAIN, MODE_CURVE
+from .const import (
+    CONF_BACKFILL_DONE,
+    CONF_PENDING_DATA_A,
+    CONF_PENDING_DATA_DA,
+    CONF_PENDING_IS_BACKFILL,
+    CONF_PENDING_TICKET,
+    DEFAULT_SCAN_INTERVAL_HOURS,
+    DOMAIN,
+    MODE_CURVE,
+)
 from .statistics import async_get_ultima_data_disponibile, async_import_curva
 
 _LOGGER = logging.getLogger(__name__)
@@ -96,6 +105,33 @@ class DuretiCoordinator(DataUpdateCoordinator):
                 self.data or {"stato": "import precedente ancora in corso"}
             )
 
+        ticket_pendente = self._entry.data.get(CONF_PENDING_TICKET)
+        if ticket_pendente:
+            # C'era già un ticket ottenuto da un requestExport riuscito prima
+            # di un reload/riavvio: lo riprendiamo direttamente invece di
+            # rifare requestExport da capo (che rischierebbe di essere
+            # bloccato dal WAF proprio mentre Duereti sta già lavorando sul
+            # ticket precedente).
+            _LOGGER.info("Riprendo il ticket %s salvato da un ciclo precedente", ticket_pendente)
+            data_da = date.fromisoformat(self._entry.data[CONF_PENDING_DATA_DA])
+            data_a = date.fromisoformat(self._entry.data[CONF_PENDING_DATA_A])
+            is_backfill = bool(self._entry.data.get(CONF_PENDING_IS_BACKFILL, False))
+
+            self.pending_since = dt_util.utcnow()
+            self.pending_ticket = ticket_pendente
+            self._background_task = self.hass.async_create_task(
+                self._poll_and_import(ticket_pendente, data_da, data_a, is_backfill),
+                name=f"{DOMAIN}_poll_import_ripreso_{ticket_pendente}",
+            )
+            return await self._con_ultime_date(
+                {
+                    "stato": "ticket precedente ripreso, in attesa del file",
+                    "ticket": ticket_pendente,
+                    "periodo": f"{data_da.isoformat()} - {data_a.isoformat()}",
+                    "backfill": is_backfill,
+                }
+            )
+
         oggi = date.today()
         is_backfill = not self._entry.data.get(CONF_BACKFILL_DONE)
 
@@ -142,6 +178,16 @@ class DuretiCoordinator(DataUpdateCoordinator):
         self._ultima_richiesta = chiave
         self.pending_since = dt_util.utcnow()
         self.pending_ticket = ticket
+
+        nuovi_dati = {
+            **self._entry.data,
+            CONF_PENDING_TICKET: ticket,
+            CONF_PENDING_DATA_DA: data_da.isoformat(),
+            CONF_PENDING_DATA_A: data_a.isoformat(),
+            CONF_PENDING_IS_BACKFILL: is_backfill,
+        }
+        self.hass.config_entries.async_update_entry(self._entry, data=nuovi_dati)
+
         self._background_task = self.hass.async_create_task(
             self._poll_and_import(ticket, data_da, data_a, is_backfill),
             name=f"{DOMAIN}_poll_import_{chiave}",
@@ -202,6 +248,19 @@ class DuretiCoordinator(DataUpdateCoordinator):
                 )
             )
 
+    def _pulisci_ticket_pendente(self) -> None:
+        """Rimuove il ticket persistito dalla config entry: usato quando il
+        polling è finito (successo o errore definitivo), così un eventuale
+        reload successivo non lo trovi più e non tenti di riprenderlo."""
+        if CONF_PENDING_TICKET not in self._entry.data:
+            return
+        nuovi_dati = dict(self._entry.data)
+        nuovi_dati.pop(CONF_PENDING_TICKET, None)
+        nuovi_dati.pop(CONF_PENDING_DATA_DA, None)
+        nuovi_dati.pop(CONF_PENDING_DATA_A, None)
+        nuovi_dati.pop(CONF_PENDING_IS_BACKFILL, None)
+        self.hass.config_entries.async_update_entry(self._entry, data=nuovi_dati)
+
     async def _poll_and_import(
         self, ticket: str, data_da: date, data_a: date, is_backfill: bool
     ) -> None:
@@ -212,6 +271,7 @@ class DuretiCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Credenziali non valide durante il polling: %s", err)
             self.pending_since = None
             self.pending_ticket = None
+            self._pulisci_ticket_pendente()
             self._avvia_reauth()
             dati = await self._con_ultime_date(
                 {**(self.data or {}), "stato": f"credenziali non valide: {err}", "ultimo_errore": str(err)}
@@ -222,6 +282,7 @@ class DuretiCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Errore recuperando il file per il ticket %s: %s", ticket, err)
             self.pending_since = None
             self.pending_ticket = None
+            self._pulisci_ticket_pendente()
             dati = await self._con_ultime_date(
                 {**(self.data or {}), "stato": f"errore: {err}", "ultimo_errore": str(err)}
             )
@@ -258,6 +319,7 @@ class DuretiCoordinator(DataUpdateCoordinator):
 
         self.pending_since = None
         self.pending_ticket = None
+        self._pulisci_ticket_pendente()
 
         dati = await self._con_ultime_date(
             {
