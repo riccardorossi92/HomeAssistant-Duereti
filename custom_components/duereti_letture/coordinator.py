@@ -107,9 +107,27 @@ class DuretiCoordinator(DataUpdateCoordinator):
             chiave = data_da.strftime("%Y-%m")
 
         if chiave == self._ultima_richiesta:
-            _LOGGER.debug("Periodo %s già richiesto, nessuna nuova richiesta necessaria", chiave)
+            _LOGGER.debug("Periodo %s già richiesto (in questa sessione), nessuna nuova richiesta", chiave)
             return await self._con_ultime_date(
                 self.data or {"stato": f"periodo {chiave} già richiesto"}
+            )
+
+        if await self._periodo_gia_coperto(data_a):
+            # self._ultima_richiesta vive solo in memoria e si perde ad ogni
+            # reload/retry del setup (es. dopo un fallimento causato dal WAF):
+            # una nuova istanza del coordinator non ha memoria di richieste
+            # riuscite in precedenza. Controlliamo quindi anche lo stato
+            # reale e persistente delle external statistics: se copre già
+            # il periodo richiesto, evitiamo del tutto la chiamata API,
+            # invece di rifarla inutilmente ad ogni retry.
+            _LOGGER.debug(
+                "Periodo %s già coperto dalle statistiche esistenti (verificato su dati "
+                "persistenti, non solo in memoria): nessuna nuova richiesta necessaria",
+                chiave,
+            )
+            self._ultima_richiesta = chiave
+            return await self._con_ultime_date(
+                self.data or {"stato": f"periodo {chiave} già coperto dai dati esistenti"}
             )
 
         try:
@@ -137,6 +155,22 @@ class DuretiCoordinator(DataUpdateCoordinator):
                 "backfill": is_backfill,
             }
         )
+
+    async def _periodo_gia_coperto(self, data_a: date) -> bool:
+        """True se TUTTI i POD configurati hanno già dati persistenti (nelle
+        external statistics) che coprono almeno fino a 'data_a'.
+
+        Usa lo stesso stato che legge il sensore 'Ultima data disponibile',
+        quindi sopravvive a reload/riavvii - a differenza di
+        self._ultima_richiesta, che è solo in memoria.
+        """
+        if not self._pods:
+            return False
+        for pod_conf in self._pods:
+            data_disp = await async_get_ultima_data_disponibile(self.hass, pod_conf["pod"])
+            if data_disp is None or data_disp < data_a:
+                return False
+        return True
 
     async def _con_ultime_date(self, dati: dict) -> dict:
         """Aggiunge al dict 'ultime_date_per_pod' leggendo lo stato reale
