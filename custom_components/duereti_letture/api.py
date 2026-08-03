@@ -290,6 +290,28 @@ class DuretiApiClient:
                 # Ticket non collegato a nessun dato: errore permanente, non ha
                 # senso continuare il polling.
                 raise DuretiApiError(f"Ticket non valido o non trovato: {err}") from err
+            except DuretiApiError as err:
+                if type(err) is not DuretiApiError:
+                    # Sottoclasse nota non gestita sopra (es. 400 di
+                    # validazione): è un errore applicativo vero, non c'entra
+                    # il WAF, non ha senso continuare a ritentare.
+                    raise
+                # DuretiApiError "puro" (nessuna sottoclasse): tipicamente una
+                # risposta non-JSON, il sintomo del blocco WAF (vedi
+                # _json_or_raise). Non è un segnale sullo stato del ticket -
+                # Duereti potrebbe benissimo starlo ancora processando
+                # normalmente. Lo trattiamo come "non ancora pronto" e
+                # continuiamo il polling con lo STESSO ticket, invece di
+                # scartarlo e perdere il lavoro già fatto da Duereti.
+                _LOGGER.warning(
+                    "requestResult tentativo %s/%s: possibile blocco WAF (%s), continuo il "
+                    "polling con lo stesso ticket invece di scartarlo",
+                    attempt,
+                    RESULT_POLL_MAX_ATTEMPTS,
+                    err,
+                )
+                await asyncio.sleep(RESULT_POLL_INTERVAL_SECONDS)
+                continue
 
             if data.get("esito") == ESITO_OK and data.get("File"):
                 return self._decode_file_field(data["File"])
