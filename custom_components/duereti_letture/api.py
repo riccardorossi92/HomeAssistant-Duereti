@@ -15,6 +15,7 @@ from datetime import date, timedelta
 import aiohttp
 
 from .const import (
+    DEFAULT_USER_AGENT,
     ESITO_OK,
     MAX_DATE_RANGE_MONTHS,
     MAX_SUPPLY_POINTS_PER_REQUEST,
@@ -88,6 +89,29 @@ class DuretiApiClient:
         self._token: str | None = None
         self._token_expiry: float = 0.0
 
+    @property
+    def _base_headers(self) -> dict[str, str]:
+        """Header comuni a tutte le richieste.
+
+        Il WAF di Duereti (F5 BIG-IP) rifiuta le richieste in modo
+        intermittente restituendo una pagina HTML "Request Rejected" al posto
+        del JSON atteso. Le stesse identiche chiamate fatte da un client HTTP
+        generico (curl/Bruno) passano molto più spesso - anche sullo STESSO
+        ticket che l'integrazione non riesce a recuperare - quindi il sospetto
+        è un fingerprinting sullo User-Agent: quello di default della sessione
+        condivisa di Home Assistant contiene "aiohttp"/"Python", stringhe che
+        i WAF penalizzano spesso.
+
+        Ci presentiamo quindi come un client HTTP ordinario. NOTA: è una
+        mitigazione empirica, non una soluzione - la causa va risolta lato
+        Duereti (ticket di assistenza aperto).
+        """
+        return {
+            "User-Agent": DEFAULT_USER_AGENT,
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "it-IT,it;q=0.9",
+        }
+
     async def async_validate_credentials(self) -> None:
         """Verifica che Client ID/Secret ID siano validi.
 
@@ -126,7 +150,9 @@ class DuretiApiClient:
 
         for tentativo in range(1, RIAVVIO_RETRY_ATTEMPTS + 1):
             try:
-                async with self._session.post(URL_REQUEST_TOKEN, json=payload) as resp:
+                async with self._session.post(
+                    URL_REQUEST_TOKEN, json=payload, headers=self._base_headers
+                ) as resp:
                     data = await self._json_or_raise(resp)
                 break
             except DuretiConflictError:
@@ -228,7 +254,7 @@ class DuretiApiClient:
             "mode": mode,
             "supplyPoints": [{"supplyPoint": p["pod"], "df": p["df"]} for p in pods],
         }
-        headers = {"Authorization": token}
+        headers = {**self._base_headers, "Authorization": token}
         try:
             async with self._session.post(URL_REQUEST_EXPORT, json=body, headers=headers) as resp:
                 data = await self._json_or_raise(resp)
@@ -270,7 +296,7 @@ class DuretiApiClient:
             # richiediamo/rinnoviamo ad ogni tentativo (_get_token usa la
             # cache se ancora valido, quindi qui è economico).
             token = await self._get_token()
-            headers = {"Authorization": token}
+            headers = {**self._base_headers, "Authorization": token}
             body = {"ticket": ticket}
 
             try:

@@ -18,6 +18,15 @@ CONF_PENDING_DATA_A = "pending_data_a"
 CONF_PENDING_IS_BACKFILL = "pending_is_backfill"
 
 BASE_URL = "https://areaclienti.duereti.it/ClientiDueRetiWeb/public/misure"
+# User-Agent usato per tutte le chiamate. Lo User-Agent di default della
+# sessione aiohttp condivisa di Home Assistant contiene "aiohttp"/"Python",
+# stringhe che il WAF di Duereti sembra penalizzare (vedi
+# DuretiApiClient._base_headers in api.py per il contesto completo).
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
 URL_REQUEST_TOKEN = f"{BASE_URL}/requestToken"
 URL_REQUEST_EXPORT = f"{BASE_URL}/requestExport"
 URL_REQUEST_RESULT = f"{BASE_URL}/requestResult"
