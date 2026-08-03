@@ -141,8 +141,10 @@ async def async_import_curva(
         last_ts = last_entry.get("start")
 
     stats = []
+    scartati = 0
     for inizio_ora, kwh in ore:
         if last_ts is not None and inizio_ora.timestamp() <= last_ts:
+            scartati += 1
             continue  # già importato, dedup restart-safe
 
         running_sum += kwh
@@ -154,8 +156,40 @@ async def async_import_curva(
             }
         )
 
+    if scartati:
+        _LOGGER.debug(
+            "POD %s: %d ore su %d scartate perché precedenti all'ultimo punto già "
+            "importato (%s)",
+            pod,
+            scartati,
+            len(ore),
+            dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).isoformat(),
+        )
+
     if not stats:
-        _LOGGER.debug("Nessun nuovo punto da importare per POD %s (già aggiornato)", pod)
+        if scartati and ore and last_ts is not None and ore[-1][0].timestamp() < last_ts:
+            # Tutti i punti del file finiscono PRIMA dell'ultimo punto già
+            # presente. Attenzione: conosciamo solo l'ultimo timestamp
+            # importato, non il primo, quindi non possiamo sapere se quel
+            # periodo era già stato importato (ri-import innocuo) o se è un
+            # buco storico vero. Segnaliamo la cosa senza affermare quale dei
+            # due sia, spiegando cosa fare nel caso peggiore.
+            _LOGGER.warning(
+                "POD %s: il file copre un periodo (%s - %s) che finisce prima dell'ultimo "
+                "dato già presente (%s), quindi non è stato importato nulla. Se quel "
+                "periodo era già stato importato puoi ignorare questo messaggio. Se invece "
+                "stai cercando di colmare un buco storico, la somma progressiva delle "
+                "statistiche non permette di inserire dati più vecchi: occorre cancellare "
+                "le statistiche di %s da Impostazioni > Sistema > Statistiche e "
+                "reimportare in ordine cronologico.",
+                pod,
+                dt_util.as_local(ore[0][0]).isoformat(),
+                dt_util.as_local(ore[-1][0]).isoformat(),
+                dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).isoformat(),
+                statistic_id,
+            )
+        else:
+            _LOGGER.debug("Nessun nuovo punto da importare per POD %s (già aggiornato)", pod)
         return
 
     metadata = {
