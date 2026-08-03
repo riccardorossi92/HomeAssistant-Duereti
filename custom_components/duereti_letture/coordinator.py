@@ -380,23 +380,59 @@ class DuretiCoordinator(DataUpdateCoordinator):
             self.async_set_updated_data(dati)
             return
 
-        from .api import parse_curve_zip
+        # Da qui in poi il file è stato ricevuto: qualunque errore in
+        # decodifica/parsing/import va gestito, altrimenti l'eccezione esce dal
+        # task in background lasciando pending_since valorizzato per sempre
+        # (il sensore "Attesa file" continuerebbe a salire all'infinito pur
+        # avendo già ricevuto i dati) e il ticket persistito non ripulito.
+        try:
+            from .api import parse_curve_zip
 
-        risultati = parse_curve_zip(zip_bytes)
+            _LOGGER.debug(
+                "File ricevuto per il ticket %s (%d byte), avvio parsing", ticket, len(zip_bytes)
+            )
+            risultati = parse_curve_zip(zip_bytes)
+            _LOGGER.debug(
+                "Parsing completato: %d POD trovati nel file (%s)",
+                len(risultati),
+                ", ".join(f"{pod}: {len(r.punti)} punti" for pod, r in risultati.items()) or "nessuno",
+            )
 
-        totali_kwh = {
-            pod: round(sum(p.valore_kwh for p in ris.punti), 3) for pod, ris in risultati.items()
-        }
+            totali_kwh = {
+                pod: round(sum(p.valore_kwh for p in ris.punti), 3) for pod, ris in risultati.items()
+            }
 
-        for pod_conf in self._pods:
-            pod = pod_conf["pod"]
-            risultato = risultati.get(pod)
-            if risultato is None:
-                _LOGGER.warning(
-                    "Nessun dato ricevuto per POD %s (periodo %s - %s)", pod, data_da, data_a
-                )
-                continue
-            await async_import_curva(self.hass, pod, risultato)
+            for pod_conf in self._pods:
+                pod = pod_conf["pod"]
+                risultato = risultati.get(pod)
+                if risultato is None:
+                    _LOGGER.warning(
+                        "Nessun dato ricevuto per POD %s (periodo %s - %s). POD presenti nel "
+                        "file: %s",
+                        pod,
+                        data_da,
+                        data_a,
+                        list(risultati.keys()) or "nessuno",
+                    )
+                    continue
+                _LOGGER.debug("Importo %d punti per il POD %s", len(risultato.punti), pod)
+                await async_import_curva(self.hass, pod, risultato)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.exception(
+                "Errore elaborando il file ricevuto per il ticket %s: %s", ticket, err
+            )
+            self.pending_since = None
+            self.pending_ticket = None
+            self._pulisci_ticket_pendente()
+            dati = await self._con_ultime_date(
+                {
+                    **(self.data or {}),
+                    "stato": f"errore elaborando il file: {err}",
+                    "ultimo_errore": str(err),
+                }
+            )
+            self.async_set_updated_data(dati)
+            return
 
         if is_backfill:
             _LOGGER.info(
