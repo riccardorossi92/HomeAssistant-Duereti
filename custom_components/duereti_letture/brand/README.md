@@ -1,12 +1,3 @@
-# Icone del brand
-
-Metti qui i file del logo Duereti per farli comparire in HACS e nell'interfaccia
-di Home Assistant (Impostazioni → Dispositivi e Servizi, e dentro HACS stesso).
-
-Da Home Assistant 2026.3 in poi, HA serve queste immagini direttamente da qui
-tramite l'API locale `/api/brands/integration/duereti_letture/icon.png` — non
-serve più fare una PR al repository home-assistant/brands.
-
 ## File richiesti
 
 | File | Uso | Requisiti |
@@ -23,9 +14,3 @@ serve più fare una PR al repository home-assistant/brands.
 - Nessun testo scritto a mano sopra il logo, nessuna modifica rispetto all'originale
 - Non usare loghi/immagini di Home Assistant (per non generare confusione con
   un'integrazione ufficiale)
-
-## Dove prendere il logo Duereti
-
-Scaricalo dal sito ufficiale di Duereti (es. dalla loro pagina "chi siamo" o
-dal footer del sito, spesso c'è una versione in alta risoluzione), oppure
-chiedilo direttamente a Duereti se non lo trovi in un formato adatto.
