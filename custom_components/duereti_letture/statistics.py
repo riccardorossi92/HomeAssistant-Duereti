@@ -81,6 +81,7 @@ async def async_import_curva(
         "source": DOMAIN,
         "statistic_id": statistic_id,
         "unit_of_measurement": "kWh",
+        "unit_class": "energy",
     }
 
     async_add_external_statistics(hass, metadata, stats)
