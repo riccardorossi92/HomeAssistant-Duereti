@@ -204,7 +204,7 @@ class DuretiCoordinator(DataUpdateCoordinator):
 
             self.pending_since = dt_util.utcnow()
             self.pending_ticket = ticket_pendente
-            self._background_task = self.hass.async_create_task(
+            self._background_task = self.hass.async_create_background_task(
                 self._poll_and_import(ticket_pendente, data_da, data_a, is_backfill),
                 name=f"{DOMAIN}_poll_import_ripreso_{ticket_pendente}",
             )
@@ -279,7 +279,7 @@ class DuretiCoordinator(DataUpdateCoordinator):
         }
         self.hass.config_entries.async_update_entry(self._entry, data=nuovi_dati)
 
-        self._background_task = self.hass.async_create_task(
+        self._background_task = self.hass.async_create_background_task(
             self._poll_and_import(ticket, data_da, data_a, is_backfill),
             name=f"{DOMAIN}_poll_import_{chiave}",
         )
