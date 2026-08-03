@@ -17,6 +17,7 @@ from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
+    statistics_during_period,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -111,98 +112,88 @@ def _aggrega_per_ora(punti: list) -> list[tuple]:
     return sorted(bucket.items())
 
 
+async def _leggi_serie_esistente(hass: HomeAssistant, statistic_id: str) -> dict:
+    """Rilegge tutta la serie oraria già presente per uno statistic_id.
+
+    Restituisce {inizio_ora_utc: kwh_dell_ora}. Serve per poter reinserire
+    dati storici: vedi async_import_curva.
+    """
+    inizio_epoca = dt_util.utc_from_timestamp(0)
+    esistenti = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        inizio_epoca,
+        None,
+        {statistic_id},
+        "hour",
+        None,
+        {"state"},
+    )
+
+    serie: dict = {}
+    for riga in esistenti.get(statistic_id, []):
+        stato = riga.get("state")
+        if stato is None:
+            continue
+        serie[dt_util.utc_from_timestamp(riga["start"])] = float(stato)
+    return serie
+
+
 async def async_import_curva(
     hass: HomeAssistant, pod: str, risultato: RisultatoLetture, nome_pod: str | None = None
 ) -> "date | None":  # noqa: F821
     """Importa i punti curva di un POD come external statistics.
 
-    Restituisce la data (locale) dell'ultimo punto effettivamente importato,
-    oppure None se non è stato importato nulla. Il chiamante la usa per
-    aggiornare subito i sensori diagnostici: async_add_external_statistics
-    accoda la scrittura al recorder invece di eseguirla immediatamente, quindi
-    rileggere il database subito dopo restituirebbe ancora i dati vecchi.
+    Fonde i nuovi dati con la serie già presente e RICALCOLA da zero tutte le
+    somme progressive, invece di limitarsi ad accodare. Questo rende
+    irrilevante l'ordine di inserimento: si possono importare mesi storici
+    dopo aver già importato dati recenti (backfill all'indietro) senza che le
+    somme risultino incoerenti - cosa impossibile accodando soltanto, perché
+    la somma è cumulativa e i punti successivi manterrebbero valori sbagliati,
+    producendo un salto artificiale nel grafico.
+
+    Restituisce la data (locale) dell'ultimo punto della serie risultante,
+    oppure None se non c'è nulla. Il chiamante la usa per aggiornare subito i
+    sensori diagnostici: async_add_external_statistics accoda la scrittura al
+    recorder, quindi rileggere il database subito dopo non mostrerebbe ancora
+    i dati appena scritti.
     """
     if not risultato.punti:
         _LOGGER.debug("Nessun punto curva da importare per POD %s", pod)
         return None
 
     statistic_id = _sanitize_statistic_id(pod)
-    ore = _aggrega_per_ora(risultato.punti)
+    nuove_ore = dict(_aggrega_per_ora(risultato.punti))
     _LOGGER.debug(
         "POD %s: %d punti a 15 minuti aggregati in %d ore (%s -> %s)",
         pod,
         len(risultato.punti),
-        len(ore),
-        ore[0][0].isoformat() if ore else "-",
-        ore[-1][0].isoformat() if ore else "-",
+        len(nuove_ore),
+        min(nuove_ore).isoformat() if nuove_ore else "-",
+        max(nuove_ore).isoformat() if nuove_ore else "-",
     )
 
-    last_stats = await get_instance(hass).async_add_executor_job(
-        get_last_statistics, hass, 1, statistic_id, True, {"sum"}
-    )
+    serie = await _leggi_serie_esistente(hass, statistic_id)
+    ore_gia_presenti = len(serie)
+
+    # I dati nuovi hanno la precedenza su quelli già presenti per la stessa
+    # ora: se Duereti rettifica una misura, vogliamo il valore aggiornato.
+    serie.update(nuove_ore)
+
+    if not serie:
+        return None
+
     running_sum = 0.0
-    last_ts = None
-    if last_stats.get(statistic_id):
-        last_entry = last_stats[statistic_id][0]
-        running_sum = last_entry.get("sum") or 0.0
-        last_ts = last_entry.get("start")
-
     stats = []
-    scartati = 0
-    for inizio_ora, kwh in ore:
-        if last_ts is not None and inizio_ora.timestamp() <= last_ts:
-            scartati += 1
-            continue  # già importato, dedup restart-safe
-
-        running_sum += kwh
+    for inizio_ora in sorted(serie):
+        running_sum += serie[inizio_ora]
         stats.append(
             {
                 "start": inizio_ora,
-                "state": kwh,
+                "state": serie[inizio_ora],
                 "sum": running_sum,
             }
         )
-
-    if scartati:
-        _LOGGER.debug(
-            "POD %s: %d ore su %d scartate perché precedenti all'ultimo punto già "
-            "importato (%s)",
-            pod,
-            scartati,
-            len(ore),
-            dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).isoformat(),
-        )
-
-    if not stats:
-        if scartati and ore and last_ts is not None and ore[-1][0].timestamp() < last_ts:
-            # Tutti i punti del file finiscono PRIMA dell'ultimo punto già
-            # presente. Attenzione: conosciamo solo l'ultimo timestamp
-            # importato, non il primo, quindi non possiamo sapere se quel
-            # periodo era già stato importato (ri-import innocuo) o se è un
-            # buco storico vero. Segnaliamo la cosa senza affermare quale dei
-            # due sia, spiegando cosa fare nel caso peggiore.
-            _LOGGER.warning(
-                "POD %s: il file copre un periodo (%s - %s) che finisce prima dell'ultimo "
-                "dato già presente (%s), quindi non è stato importato nulla. Se quel "
-                "periodo era già stato importato puoi ignorare questo messaggio. Se invece "
-                "stai cercando di colmare un buco storico, la somma progressiva delle "
-                "statistiche non permette di inserire dati più vecchi: occorre cancellare "
-                "le statistiche di %s da Impostazioni > Sistema > Statistiche e "
-                "reimportare in ordine cronologico.",
-                pod,
-                dt_util.as_local(ore[0][0]).isoformat(),
-                dt_util.as_local(ore[-1][0]).isoformat(),
-                dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).isoformat(),
-                statistic_id,
-            )
-        else:
-            _LOGGER.debug("Nessun nuovo punto da importare per POD %s (già aggiornato)", pod)
-        # Nulla di nuovo importato ora, ma se c'erano già dati la data
-        # disponibile resta quella dell'ultimo punto presente: la restituiamo
-        # comunque, così il sensore non torna a "Sconosciuto".
-        if last_ts is not None:
-            return dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).date()
-        return None
 
     metadata = {
         "has_mean": False,
@@ -218,10 +209,13 @@ async def async_import_curva(
     async_add_external_statistics(hass, metadata, stats)
     ultima_data = dt_util.as_local(stats[-1]["start"]).date()
     _LOGGER.info(
-        "Importati %d punti curva per POD %s (%s), ultimo punto: %s",
-        len(stats),
+        "POD %s (%s): %d ore nuove/aggiornate, serie riscritta con %d ore totali "
+        "(erano %d), ultimo punto %s",
         pod,
         statistic_id,
+        len(nuove_ore),
+        len(stats),
+        ore_gia_presenti,
         ultima_data.isoformat(),
     )
     return ultima_data

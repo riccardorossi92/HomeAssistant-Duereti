@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -52,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     async_add_entities(entità)
 
 
-class DuretiUltimoImportSensor(CoordinatorEntity, SensorEntity):
+class DuretiUltimoImportSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
     """Mostra la data dell'ultimo import di curve riuscito."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -63,12 +64,28 @@ class DuretiUltimoImportSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_ultimo_import"
         self._attr_device_info = _device_info_account(entry)
+        self._ripristinato: str | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Recupera l'ultimo valore noto dopo un riavvio.
+
+        I dati del coordinator vivono in memoria: dopo un riavvio restano
+        vuoti finché non arriva un nuovo import (che può essere lontano ore o
+        giorni), e senza ripristino il sensore mostrerebbe "Sconosciuto"
+        pur avendo dati validi in dashboard.
+        """
+        await super().async_added_to_hass()
+        ultimo_stato = await self.async_get_last_state()
+        if ultimo_stato and ultimo_stato.state not in (None, "unknown", "unavailable"):
+            self._ripristinato = ultimo_stato.state
 
     @property
     def native_value(self):
         if self.coordinator.data:
-            return self.coordinator.data.get("ultimo_aggiornamento")
-        return None
+            valore = self.coordinator.data.get("ultimo_aggiornamento")
+            if valore is not None:
+                return valore
+        return self._ripristinato
 
     @property
     def extra_state_attributes(self):
@@ -111,7 +128,7 @@ class DuretiUltimaDataDisponibileSensor(CoordinatorEntity, SensorEntity):
         return date.fromisoformat(valore)
 
 
-class DuretiConsumoPeriodoSensor(CoordinatorEntity, SensorEntity):
+class DuretiConsumoPeriodoSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
     """Mostra il consumo totale (kWh) dell'ultimo periodo importato per un POD.
 
     Non è una statistica progressiva come le external statistics: è solo un
@@ -134,12 +151,26 @@ class DuretiConsumoPeriodoSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_{pod}_consumo_periodo"
         self._attr_name = "Consumo ultimo periodo"
         self._attr_device_info = _device_info_pod(entry, pod)
+        self._ripristinato: float | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Recupera l'ultimo valore noto dopo un riavvio (vedi
+        DuretiUltimoImportSensor per il motivo)."""
+        await super().async_added_to_hass()
+        ultimo_stato = await self.async_get_last_state()
+        if ultimo_stato and ultimo_stato.state not in (None, "unknown", "unavailable"):
+            try:
+                self._ripristinato = float(ultimo_stato.state)
+            except ValueError:
+                self._ripristinato = None
 
     @property
     def native_value(self) -> float | None:
-        if not self.coordinator.data:
-            return None
-        return self.coordinator.data.get("totale_kwh_periodo_per_pod", {}).get(self._pod)
+        if self.coordinator.data:
+            valore = self.coordinator.data.get("totale_kwh_periodo_per_pod", {}).get(self._pod)
+            if valore is not None:
+                return valore
+        return self._ripristinato
 
     @property
     def extra_state_attributes(self):
