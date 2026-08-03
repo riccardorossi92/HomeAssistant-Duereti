@@ -33,6 +33,69 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Chiavi il cui valore non va MAI loggato in chiaro: le credenziali API e il
+# token di sessione. home-assistant.log viene spesso condiviso per chiedere
+# supporto, quindi qualunque cosa finisca qui va considerata pubblica.
+_CHIAVI_SEGRETE = {"clientid", "secretid", "authorization", "token"}
+
+
+def _oscura(valore: object) -> str:
+    """Riduce un segreto a una forma che resta utile per il debug (si capisce
+    se è presente, se cambia tra una chiamata e l'altra, quanto è lungo) senza
+    rivelarlo."""
+    testo = str(valore)
+    if not testo:
+        return "<vuoto>"
+    if len(testo) <= 8:
+        return f"<{len(testo)} caratteri>"
+    return f"{testo[:4]}…{testo[-2:]} (<{len(testo)} caratteri>)"
+
+
+def _sanitizza(dati: dict | None) -> dict:
+    """Copia di un dict con i valori sensibili oscurati, pronta per il log."""
+    if not dati:
+        return {}
+    return {
+        chiave: (_oscura(valore) if chiave.lower() in _CHIAVI_SEGRETE else valore)
+        for chiave, valore in dati.items()
+    }
+
+
+def _log_richiesta(url: str, body: dict | None, headers: dict | None) -> None:
+    """Logga la richiesta in uscita (solo a livello DEBUG).
+
+    Serve a confrontare byte per byte cosa manda l'integrazione rispetto a un
+    client che funziona (curl/Bruno), utile per capire perché il WAF di
+    Duereti rifiuta le une e non le altre.
+    """
+    if not _LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    _LOGGER.debug(
+        "--> POST %s\n    headers: %s\n    body: %s",
+        url,
+        _sanitizza(headers),
+        _sanitizza(body),
+    )
+
+
+def _log_risposta(url: str, status: int, headers: object, corpo: str) -> None:
+    """Logga la risposta grezza (solo a livello DEBUG).
+
+    Il corpo viene loggato così com'è (troncato): quando il WAF interviene non
+    è JSON ma una pagina HTML "Request Rejected", e vedere il testo esatto con
+    il Support ID è proprio l'informazione che serve.
+    """
+    if not _LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    anteprima = corpo if len(corpo) <= 800 else f"{corpo[:800]}… [troncato, {len(corpo)} caratteri]"
+    _LOGGER.debug(
+        "<-- %s da %s\n    headers: %s\n    body: %s",
+        status,
+        url,
+        dict(headers) if headers else {},
+        anteprima,
+    )
+
 
 class DuretiApiError(Exception):
     """Errore generico nella comunicazione con le API Duereti."""
@@ -150,6 +213,7 @@ class DuretiApiClient:
 
         for tentativo in range(1, RIAVVIO_RETRY_ATTEMPTS + 1):
             try:
+                _log_richiesta(URL_REQUEST_TOKEN, payload, self._base_headers)
                 async with self._session.post(
                     URL_REQUEST_TOKEN, json=payload, headers=self._base_headers
                 ) as resp:
@@ -197,13 +261,22 @@ class DuretiApiClient:
     async def _json_or_raise(self, resp: aiohttp.ClientResponse) -> dict:
         """Legge il body JSON (anche in caso di errore: il manuale conferma che
         tutte le risposte, comprese quelle 4xx, hanno body JSON con esito/message)
-        e solleva l'eccezione specifica in base allo status HTTP documentato."""
+        e solleva l'eccezione specifica in base allo status HTTP documentato.
+
+        Legge sempre prima il testo grezzo e lo logga (a DEBUG): quando il WAF
+        interviene la risposta non è JSON ma HTML, e il testo esatto con il
+        Support ID è l'informazione utile per il ticket di assistenza.
+        """
+        import json as _json
+
+        testo = await resp.text()
+        _log_risposta(str(resp.url), resp.status, resp.headers, testo)
+
         try:
-            data = await resp.json(content_type=None)
-        except Exception:  # noqa: BLE001
-            text = await resp.text()
+            data = _json.loads(testo)
+        except ValueError:
             raise DuretiApiError(
-                f"Risposta non JSON (HTTP {resp.status}): {text[:300]}", http_status=resp.status
+                f"Risposta non JSON (HTTP {resp.status}): {testo[:300]}", http_status=resp.status
             )
 
         if resp.status == 200:
@@ -256,6 +329,7 @@ class DuretiApiClient:
         }
         headers = {**self._base_headers, "Authorization": token}
         try:
+            _log_richiesta(URL_REQUEST_EXPORT, body, headers)
             async with self._session.post(URL_REQUEST_EXPORT, json=body, headers=headers) as resp:
                 data = await self._json_or_raise(resp)
         except DuretiValidationError as err:
@@ -300,6 +374,7 @@ class DuretiApiClient:
             body = {"ticket": ticket}
 
             try:
+                _log_richiesta(URL_REQUEST_RESULT, body, headers)
                 async with self._session.post(URL_REQUEST_RESULT, json=body, headers=headers) as resp:
                     data = await self._json_or_raise(resp)
             except DuretiAuthError:
