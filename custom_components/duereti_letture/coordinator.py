@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -182,6 +182,52 @@ class DuretiCoordinator(DataUpdateCoordinator):
             return ticket, data_da
 
         raise ultimo_errore
+
+    async def async_forza_ticket(
+        self, ticket: str, data_da: date | None = None, data_a: date | None = None
+    ) -> None:
+        """Riprende manualmente un ticket noto, saltando requestExport.
+
+        Serve quando si è ottenuto un ticket per altre vie (es. una chiamata
+        fatta a mano con curl/Bruno, o un ticket che l'integrazione aveva
+        perso) e lo si vuole far elaborare senza chiedere a Duereti un nuovo
+        export - operazione che il WAF blocca spesso.
+
+        Se le date non vengono indicate si assume il mese precedente completo:
+        servono solo come etichetta del periodo nei sensori diagnostici, non
+        influenzano i dati, che arrivano interamente dal file.
+        """
+        if self._background_task and not self._background_task.done():
+            raise HomeAssistantError(
+                "C'è già un recupero in corso: attendi che finisca (vedi il sensore "
+                "'Attesa file') oppure ricarica l'integrazione prima di forzare un ticket."
+            )
+
+        if data_da is None or data_a is None:
+            default_da, default_a = _mese_precedente_completo(date.today())
+            data_da = data_da or default_da
+            data_a = data_a or default_a
+
+        _LOGGER.info(
+            "Ticket forzato manualmente: %s (periodo %s - %s)", ticket, data_da, data_a
+        )
+
+        nuovi_dati = {
+            **self._entry.data,
+            CONF_PENDING_TICKET: ticket,
+            CONF_PENDING_DATA_DA: data_da.isoformat(),
+            CONF_PENDING_DATA_A: data_a.isoformat(),
+            CONF_PENDING_IS_BACKFILL: False,
+        }
+        self.hass.config_entries.async_update_entry(self._entry, data=nuovi_dati)
+
+        self.pending_since = dt_util.utcnow()
+        self.pending_ticket = ticket
+        self._ultima_richiesta = None  # non è una richiesta nostra: non marcare il periodo
+        self._background_task = self.hass.async_create_background_task(
+            self._poll_and_import(ticket, data_da, data_a, is_backfill=False),
+            name=f"{DOMAIN}_poll_import_forzato_{ticket}",
+        )
 
     async def _async_update_data(self) -> dict:
         if self._background_task and not self._background_task.done():
