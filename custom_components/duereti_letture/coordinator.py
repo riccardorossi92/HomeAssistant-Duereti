@@ -21,6 +21,7 @@ from .const import (
     CONF_PENDING_TICKET,
     DEFAULT_SCAN_INTERVAL_HOURS,
     DOMAIN,
+    MAX_DATE_RANGE_MONTHS,
     MODE_CURVE,
 )
 from .statistics import async_get_ultima_data_disponibile, async_import_curva
@@ -42,6 +43,20 @@ def _mese_precedente_completo(oggi: date) -> tuple[date, date]:
     return primo_giorno_mese_precedente, ultimo_giorno_mese_precedente
 
 
+def _inizio_n_mesi_prima(fine: date, n_mesi: int) -> date:
+    """Primo giorno del mese che inizia n_mesi (incluso il mese di 'fine') prima di 'fine'.
+
+    Es. con fine=2026-07-31 e n_mesi=6 -> 2026-02-01 (Feb...Lug = 6 mesi).
+    Con n_mesi=1 -> 2026-07-01, cioè lo stesso range della richiesta mensile
+    normale: è il caso limite a cui converge il fallback a range decrescente.
+    """
+    anno, mese = fine.year, fine.month - (n_mesi - 1)
+    while mese <= 0:
+        mese += 12
+        anno -= 1
+    return date(anno, mese, 1)
+
+
 def _range_sei_mesi_precedenti(oggi: date) -> tuple[date, date]:
     """Calcola il range degli ultimi 6 mesi completi (per l'iniezione iniziale).
 
@@ -50,11 +65,7 @@ def _range_sei_mesi_precedenti(oggi: date) -> tuple[date, date]:
     limite di 6 mesi dichiarato dal manuale per requestExport.
     """
     _, fine = _mese_precedente_completo(oggi)
-    anno, mese = fine.year, fine.month - 5
-    while mese <= 0:
-        mese += 12
-        anno -= 1
-    inizio = date(anno, mese, 1)
+    inizio = _inizio_n_mesi_prima(fine, MAX_DATE_RANGE_MONTHS)
     return inizio, fine
 
 
@@ -119,6 +130,59 @@ class DuretiCoordinator(DataUpdateCoordinator):
             )
             self._background_task.cancel()
 
+    async def _richiedi_backfill_con_fallback(self, data_a: date) -> tuple[str, date]:
+        """Prova il backfill con range decrescente se il WAF blocca la richiesta.
+
+        Parte da MAX_DATE_RANGE_MONTHS mesi (6); se la risposta non è JSON
+        (il pattern tipico del blocco WAF, non un errore applicativo vero -
+        vedi la nota sotto), riprova con un mese in meno, fino a un minimo
+        di 1 mese, per vedere se un payload/range più piccolo passa.
+
+        Distinzione WAF vs errore applicativo: le sottoclassi di
+        DuretiApiError (DuretiAuthError, DuretiValidationError,
+        DuretiConflictError, DuretiRateLimitError, DuretiNotFoundError)
+        corrispondono a codici di errore reali documentati dal manuale - se
+        capitano, riprovare con un range più piccolo non ha senso, il
+        problema è un altro. Solo la classe base DuretiApiError "pura"
+        (nessuna sottoclasse) viene sollevata per risposte non-JSON, che è
+        il sintomo del WAF.
+
+        Restituisce (ticket, data_da effettivamente usata). Solleva l'ultimo
+        errore incontrato se anche il range minimo di 1 mese fallisce.
+        """
+        ultimo_errore: DuretiApiError | None = None
+        for n_mesi in range(MAX_DATE_RANGE_MONTHS, 0, -1):
+            data_da = _inizio_n_mesi_prima(data_a, n_mesi)
+            try:
+                ticket = await self.api.request_export(data_da, data_a, self._pods, mode=MODE_CURVE)
+            except DuretiAuthError:
+                raise  # non c'entra il range, propaga subito
+            except DuretiApiError as err:
+                if type(err) is not DuretiApiError:
+                    raise  # errore applicativo vero, non c'entra il range
+                _LOGGER.warning(
+                    "requestExport per il backfill (%d mesi, %s - %s) sembra bloccato dal "
+                    "WAF (%s)%s",
+                    n_mesi,
+                    data_da,
+                    data_a,
+                    err,
+                    ", provo con un mese in meno" if n_mesi > 1 else " anche al minimo di 1 mese",
+                )
+                ultimo_errore = err
+                continue
+
+            if n_mesi < MAX_DATE_RANGE_MONTHS:
+                _LOGGER.info(
+                    "Backfill riuscito con un range ridotto a %d mesi (invece di %d) dopo che "
+                    "range più ampi sono stati bloccati dal WAF",
+                    n_mesi,
+                    MAX_DATE_RANGE_MONTHS,
+                )
+            return ticket, data_da
+
+        raise ultimo_errore
+
     async def _async_update_data(self) -> dict:
         if self._background_task and not self._background_task.done():
             _LOGGER.debug("Import precedente ancora in corso, salto questo ciclo")
@@ -155,13 +219,15 @@ class DuretiCoordinator(DataUpdateCoordinator):
 
         oggi = date.today()
         is_backfill = not self._entry.data.get(CONF_BACKFILL_DONE)
+        data_da_mensile, data_a = _mese_precedente_completo(oggi)
 
         if is_backfill:
-            data_da, data_a = _range_sei_mesi_precedenti(oggi)
-            chiave = f"backfill:{data_da.isoformat()}_{data_a.isoformat()}"
+            # La chiave non include più il numero di mesi: può variare tra un
+            # tentativo e l'altro (fallback a range decrescente), ma il
+            # periodo logico "backfill fino a data_a" resta lo stesso.
+            chiave = f"backfill:{data_a.isoformat()}"
         else:
-            data_da, data_a = _mese_precedente_completo(oggi)
-            chiave = data_da.strftime("%Y-%m")
+            chiave = data_da_mensile.strftime("%Y-%m")
 
         if chiave == self._ultima_richiesta:
             _LOGGER.debug("Periodo %s già richiesto (in questa sessione), nessuna nuova richiesta", chiave)
@@ -188,7 +254,11 @@ class DuretiCoordinator(DataUpdateCoordinator):
             )
 
         try:
-            ticket = await self.api.request_export(data_da, data_a, self._pods, mode=MODE_CURVE)
+            if is_backfill:
+                ticket, data_da = await self._richiedi_backfill_con_fallback(data_a)
+            else:
+                data_da = data_da_mensile
+                ticket = await self.api.request_export(data_da, data_a, self._pods, mode=MODE_CURVE)
         except DuretiAuthError as err:
             # Solleva ConfigEntryAuthFailed: HA lo gestisce da solo avviando
             # automaticamente il flusso di reauth con async_step_reauth.
