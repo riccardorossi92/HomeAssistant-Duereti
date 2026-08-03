@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 
+from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
@@ -41,7 +42,7 @@ async def async_import_curva(
     statistic_id = _sanitize_statistic_id(pod)
     punti_ordinati = sorted(risultato.punti, key=lambda p: p.timestamp)
 
-    last_stats = await hass.async_add_executor_job(
+    last_stats = await get_instance(hass).async_add_executor_job(
         get_last_statistics, hass, 1, statistic_id, True, {"sum"}
     )
     running_sum = 0.0
@@ -99,7 +100,7 @@ async def async_get_ultima_data_disponibile(hass: HomeAssistant, pod: str):
     from datetime import datetime
 
     statistic_id = _sanitize_statistic_id(pod)
-    last_stats = await hass.async_add_executor_job(
+    last_stats = await get_instance(hass).async_add_executor_job(
         get_last_statistics, hass, 1, statistic_id, True, {"sum"}
     )
     entry = last_stats.get(statistic_id)
