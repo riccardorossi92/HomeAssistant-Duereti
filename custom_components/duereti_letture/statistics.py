@@ -33,6 +33,55 @@ def _sanitize_statistic_id(pod: str) -> str:
     return f"{DOMAIN}:{slug}_energia"
 
 
+# Interpretazione della colonna FL_ORA_LEGALE del CSV Duereti.
+#
+# ATTENZIONE, questa mappatura è un'inferenza, non un dato confermato dal
+# manuale: negli export reali visti finora (maggio-luglio, tutti in ora
+# legale) il valore era sempre "2". Da lì l'ipotesi che il flag indichi
+# direttamente l'offset UTC in ore: 2 = ora legale (CEST, UTC+2),
+# 1 = ora solare (CET, UTC+1).
+#
+# Se il flag ha un valore diverso da quelli previsti si ricade sul fuso
+# locale di Home Assistant (comportamento precedente), loggando un warning
+# una sola volta: così un'ipotesi sbagliata degrada in modo prevedibile
+# invece di produrre silenziosamente timestamp errati.
+_OFFSET_DA_FLAG = {
+    "1": 1,  # ora solare (CET)
+    "2": 2,  # ora legale (CEST)
+}
+
+_flag_sconosciuti_segnalati: set[str] = set()
+
+
+def _timestamp_aware(punto) -> "datetime":  # noqa: F821
+    """Rende timezone-aware il timestamp naive di un punto curva.
+
+    Usa FL_ORA_LEGALE quando è un valore noto, perché è l'unico modo di
+    distinguere le due ore identiche del cambio ora d'autunno. Altrimenti
+    ricade sul fuso locale, che in quell'unica ora all'anno è ambiguo.
+    """
+    from datetime import timedelta, timezone
+
+    ts = punto.timestamp
+    if ts.tzinfo is not None:
+        return ts
+
+    flag = getattr(punto, "ora_legale", None)
+    offset = _OFFSET_DA_FLAG.get(flag) if flag else None
+
+    if offset is not None:
+        return ts.replace(tzinfo=timezone(timedelta(hours=offset)))
+
+    if flag and flag not in _flag_sconosciuti_segnalati:
+        _flag_sconosciuti_segnalati.add(flag)
+        _LOGGER.warning(
+            "Valore FL_ORA_LEGALE non riconosciuto (%r): uso il fuso locale come ripiego. "
+            "Segnalalo come issue: serve a gestire correttamente il cambio ora.",
+            flag,
+        )
+    return ts.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+
+
 def _aggrega_per_ora(punti: list) -> list[tuple]:
     """Aggrega i punti curva (intervalli di 15 minuti) in bucket orari.
 
@@ -45,24 +94,18 @@ def _aggrega_per_ora(punti: list) -> list[tuple]:
        all'ora locale italiana. HA li rifiuta con "Naive timestamp: no or
        invalid timezone info provided", quindi vanno resi timezone-aware.
 
-    NOTA sull'ora legale: il CSV ha una colonna FL_ORA_LEGALE che qui non
-    usiamo. Nell'ora ripetuta del cambio ora (l'ultima domenica di ottobre)
-    due intervalli diversi possono avere lo stesso orario locale; in quel caso
-    finiscono nello stesso bucket e i loro consumi vengono sommati. È il
-    comportamento meno sbagliato senza interpretare il flag, e riguarda una
-    sola ora all'anno.
+    L'aggregazione avviene sull'istante assoluto (UTC), non sull'ora locale:
+    nell'ora ripetuta del cambio ora due istanti diversi hanno lo stesso
+    orario locale, e raggrupparli per orario locale li fonderebbe. In UTC
+    restano distinti, quindi diventano due ore separate come dev'essere.
 
-    Restituisce una lista di (inizio_ora_aware, kwh_totali_nell_ora) ordinata.
+    Restituisce una lista di (inizio_ora_utc_aware, kwh_totali) ordinata.
     """
     bucket: dict = defaultdict(float)
 
     for punto in punti:
-        ts = punto.timestamp
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
-        else:
-            ts = dt_util.as_local(ts)
-        inizio_ora = ts.replace(minute=0, second=0, microsecond=0)
+        ts_utc = dt_util.as_utc(_timestamp_aware(punto))
+        inizio_ora = ts_utc.replace(minute=0, second=0, microsecond=0)
         bucket[inizio_ora] += punto.valore_kwh
 
     return sorted(bucket.items())

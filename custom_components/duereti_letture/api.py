@@ -132,6 +132,11 @@ class CurvaPunto:
 
     timestamp: "datetime"  # noqa: F821 - import sotto per evitare cicli
     valore_kwh: float
+    # Valore grezzo della colonna FL_ORA_LEGALE del CSV. Serve a disambiguare
+    # l'ora ripetuta al passaggio da ora legale a ora solare: il timestamp da
+    # solo è ambiguo, questo flag dice a quale delle due ore appartiene.
+    # Vedi statistics._offset_da_flag per l'interpretazione.
+    ora_legale: str | None = None
 
 
 @dataclass
@@ -390,7 +395,16 @@ class DuretiApiClient:
             except DuretiNotFoundError as err:
                 # Ticket non collegato a nessun dato: errore permanente, non ha
                 # senso continuare il polling.
-                raise DuretiApiError(f"Ticket non valido o non trovato: {err}") from err
+                # Ticket presente ma non collegato a nessun dato: errore
+                # permanente, non ha senso continuare il polling. Rilanciamo il
+                # tipo originale (non la classe base) così il chiamante può
+                # distinguere "ticket davvero invalido" - l'unico caso in cui
+                # ha senso scartarlo - da un errore transitorio.
+                raise DuretiNotFoundError(
+                    f"Ticket non valido o non trovato: {err}",
+                    http_status=404,
+                    data=getattr(err, "data", None),
+                ) from err
             except DuretiApiError as err:
                 if type(err) is not DuretiApiError:
                     # Sottoclasse nota non gestita sopra (es. 400 di
@@ -587,7 +601,11 @@ def parse_curve_zip(zip_bytes: bytes) -> dict[str, RisultatoLetture]:
                     continue
 
                 risultati.setdefault(pod, RisultatoLetture(pod=pod)).punti.append(
-                    CurvaPunto(timestamp=ts, valore_kwh=valore)
+                    CurvaPunto(
+                        timestamp=ts,
+                        valore_kwh=valore,
+                        ora_legale=(row.get("FL_ORA_LEGALE") or "").strip() or None,
+                    )
                 )
 
     return risultati
