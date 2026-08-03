@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -116,12 +116,15 @@ class DuretiConsumoPeriodoSensor(CoordinatorEntity, SensorEntity):
 
     Non è una statistica progressiva come le external statistics: è solo un
     numero di riepilogo dell'ultimo import riuscito, comodo per un colpo
-    d'occhio senza aprire il grafico della Energy Dashboard.
+    d'occhio senza aprire il grafico della Energy Dashboard. Volutamente
+    senza device_class/state_class 'energy': quel valore va sulle external
+    statistics (statistics.py), non su questo sensore. Un device_class
+    'energy' con un valore che si azzera/ricomincia ad ogni periodo (non
+    cumulativo da sempre) non è comunque compatibile con nessuno degli
+    state_class ammessi da HA per quel device_class ('total'/'total_increasing').
     """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "kWh"
     _attr_icon = "mdi:lightning-bolt"
 
