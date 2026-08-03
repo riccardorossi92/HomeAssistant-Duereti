@@ -12,7 +12,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .api import DuretiApiClient, DuretiApiError, DuretiAuthError
+from .api import DuretiApiClient, DuretiApiError, DuretiAuthError, DuretiNotFoundError
 from .const import (
     CONF_BACKFILL_DONE,
     CONF_PENDING_DATA_A,
@@ -359,23 +359,58 @@ class DuretiCoordinator(DataUpdateCoordinator):
         try:
             zip_bytes = await self.api.request_result(ticket)
         except DuretiAuthError as err:
-            _LOGGER.error("Credenziali non valide durante il polling: %s", err)
+            # Le credenziali non c'entrano con la validità del ticket:
+            # lo conserviamo, così dopo il reauth si riprende da lì.
+            _LOGGER.error(
+                "Credenziali non valide durante il polling: %s. Il ticket %s viene conservato "
+                "e verrà ripreso dopo il reinserimento delle credenziali.",
+                err,
+                ticket,
+            )
+            self.pending_since = None
+            self.pending_ticket = None
+            self._avvia_reauth()
+            dati = await self._con_ultime_date(
+                {
+                    **(self.data or {}),
+                    "stato": f"credenziali non valide: {err}",
+                    "ultimo_errore": str(err),
+                    "ticket_conservato": ticket,
+                }
+            )
+            self.async_set_updated_data(dati)
+            return
+        except DuretiNotFoundError as err:
+            # Unico caso in cui ha senso scartare il ticket: Duereti dice
+            # esplicitamente che non è collegato a nessun dato.
+            _LOGGER.error("Ticket %s non valido lato Duereti: %s", ticket, err)
             self.pending_since = None
             self.pending_ticket = None
             self._pulisci_ticket_pendente()
-            self._avvia_reauth()
             dati = await self._con_ultime_date(
-                {**(self.data or {}), "stato": f"credenziali non valide: {err}", "ultimo_errore": str(err)}
+                {**(self.data or {}), "stato": f"ticket non valido: {err}", "ultimo_errore": str(err)}
             )
             self.async_set_updated_data(dati)
             return
         except DuretiApiError as err:
-            _LOGGER.error("Errore recuperando il file per il ticket %s: %s", ticket, err)
+            # Timeout del polling, blocco WAF, errore di rete: il ticket lato
+            # Duereti resta valido, quindi lo CONSERVIAMO e al prossimo ciclo
+            # riprendiamo da lì invece di richiederne uno nuovo.
+            _LOGGER.error(
+                "Errore recuperando il file per il ticket %s: %s. Il ticket viene conservato "
+                "per riprovare al prossimo ciclo.",
+                ticket,
+                err,
+            )
             self.pending_since = None
             self.pending_ticket = None
-            self._pulisci_ticket_pendente()
             dati = await self._con_ultime_date(
-                {**(self.data or {}), "stato": f"errore: {err}", "ultimo_errore": str(err)}
+                {
+                    **(self.data or {}),
+                    "stato": f"errore: {err}",
+                    "ultimo_errore": str(err),
+                    "ticket_conservato": ticket,
+                }
             )
             self.async_set_updated_data(dati)
             return
@@ -419,16 +454,26 @@ class DuretiCoordinator(DataUpdateCoordinator):
                 await async_import_curva(self.hass, pod, risultato)
         except Exception as err:  # noqa: BLE001
             _LOGGER.exception(
-                "Errore elaborando il file ricevuto per il ticket %s: %s", ticket, err
+                "Errore elaborando il file ricevuto per il ticket %s: %s. Il ticket viene "
+                "CONSERVATO: il file lato Duereti è valido, il problema è nell'elaborazione "
+                "locale, quindi al prossimo ciclo verrà riscaricato con lo stesso ticket "
+                "invece di sprecarne uno nuovo (che il WAF potrebbe bloccare).",
+                ticket,
+                err,
             )
+            # Volutamente NON chiamiamo _pulisci_ticket_pendente(): un errore
+            # qui riguarda il nostro codice (parsing, import, formato dei dati),
+            # non la validità del ticket. Ripulirlo significherebbe buttare via
+            # un ticket funzionante e doverne richiedere un altro, cosa tutt'altro
+            # che gratuita visti i blocchi intermittenti del WAF su requestExport.
             self.pending_since = None
             self.pending_ticket = None
-            self._pulisci_ticket_pendente()
             dati = await self._con_ultime_date(
                 {
                     **(self.data or {}),
                     "stato": f"errore elaborando il file: {err}",
                     "ultimo_errore": str(err),
+                    "ticket_conservato": ticket,
                 }
             )
             self.async_set_updated_data(dati)
