@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -198,10 +198,16 @@ class DuretiCoordinator(DataUpdateCoordinator):
         influenzano i dati, che arrivano interamente dal file.
         """
         if self._background_task and not self._background_task.done():
-            raise HomeAssistantError(
-                "C'è già un recupero in corso: attendi che finisca (vedi il sensore "
-                "'Attesa file') oppure ricarica l'integrazione prima di forzare un ticket."
+            # Forzare un ticket è un'azione deliberata dell'utente: ha la
+            # precedenza sul recupero in corso, che viene annullato. Logghiamo
+            # il ticket interrotto così resta recuperabile dai log (potrebbe
+            # essere ancora valido e riutilizzabile in seguito).
+            _LOGGER.warning(
+                "Annullo il recupero in corso (ticket %s) per forzare il ticket %s",
+                self.pending_ticket or "sconosciuto",
+                ticket,
             )
+            self._background_task.cancel()
 
         if data_da is None or data_a is None:
             default_da, default_a = _mese_precedente_completo(date.today())

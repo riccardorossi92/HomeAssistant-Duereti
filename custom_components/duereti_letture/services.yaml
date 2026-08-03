@@ -5,7 +5,8 @@ recupera_ticket:
     requestExport. Utile quando si è ottenuto un ticket per altre vie (es. una
     chiamata manuale con curl/Bruno) o quando l'integrazione ne aveva perso
     uno ancora valido: evita di chiedere un nuovo export, che è la chiamata
-    bloccata più spesso dal WAF di Duereti.
+    bloccata più spesso dal WAF di Duereti. Se c'è già un recupero in corso
+    viene annullato (il suo ticket resta annotato nei log).
   fields:
     ticket:
       name: Ticket
