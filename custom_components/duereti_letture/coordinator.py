@@ -363,8 +363,16 @@ class DuretiCoordinator(DataUpdateCoordinator):
 
     async def _con_ultime_date(self, dati: dict) -> dict:
         """Aggiunge al dict 'ultime_date_per_pod' leggendo lo stato reale
-        delle external statistics, indipendentemente da nuove richieste."""
-        ultime_date = {}
+        delle external statistics, indipendentemente da nuove richieste.
+
+        Se per un POD il database non restituisce nulla ma avevamo già un
+        valore noto, quest'ultimo viene conservato: la scrittura delle
+        statistiche passa dal recorder in modo asincrono, quindi una lettura
+        può temporaneamente non vedere dati appena importati e non deve
+        riportare il sensore a "Sconosciuto".
+        """
+        note = (self.data or {}).get("ultime_date_per_pod", {})
+        ultime_date = dict(note)
         for pod_conf in self._pods:
             pod = pod_conf["pod"]
             data_disp = await async_get_ultima_data_disponibile(self.hass, pod)
@@ -489,6 +497,7 @@ class DuretiCoordinator(DataUpdateCoordinator):
                 pod: round(sum(p.valore_kwh for p in ris.punti), 3) for pod, ris in risultati.items()
             }
 
+            date_importate: dict[str, str] = {}
             for pod_conf in self._pods:
                 pod = pod_conf["pod"]
                 risultato = risultati.get(pod)
@@ -503,7 +512,9 @@ class DuretiCoordinator(DataUpdateCoordinator):
                     )
                     continue
                 _LOGGER.debug("Importo %d punti per il POD %s", len(risultato.punti), pod)
-                await async_import_curva(self.hass, pod, risultato)
+                ultima = await async_import_curva(self.hass, pod, risultato)
+                if ultima is not None:
+                    date_importate[pod] = ultima.isoformat()
         except Exception as err:  # noqa: BLE001
             _LOGGER.exception(
                 "Errore elaborando il file ricevuto per il ticket %s: %s. Il ticket viene "
@@ -555,4 +566,13 @@ class DuretiCoordinator(DataUpdateCoordinator):
                 "totale_kwh_periodo_per_pod": totali_kwh,
             }
         )
+        # Le date appena importate hanno la precedenza su quelle rilette dal
+        # database: async_add_external_statistics accoda la scrittura al
+        # recorder, quindi una rilettura immediata non le vedrebbe ancora e il
+        # sensore "Ultima data disponibile" resterebbe a "Sconosciuto" fino al
+        # ciclo successivo (24 ore dopo).
+        dati["ultime_date_per_pod"] = {
+            **dati.get("ultime_date_per_pod", {}),
+            **date_importate,
+        }
         self.async_set_updated_data(dati)

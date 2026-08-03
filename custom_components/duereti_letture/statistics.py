@@ -113,11 +113,18 @@ def _aggrega_per_ora(punti: list) -> list[tuple]:
 
 async def async_import_curva(
     hass: HomeAssistant, pod: str, risultato: RisultatoLetture, nome_pod: str | None = None
-) -> None:
-    """Importa i punti curva di un POD come external statistics."""
+) -> "date | None":  # noqa: F821
+    """Importa i punti curva di un POD come external statistics.
+
+    Restituisce la data (locale) dell'ultimo punto effettivamente importato,
+    oppure None se non è stato importato nulla. Il chiamante la usa per
+    aggiornare subito i sensori diagnostici: async_add_external_statistics
+    accoda la scrittura al recorder invece di eseguirla immediatamente, quindi
+    rileggere il database subito dopo restituirebbe ancora i dati vecchi.
+    """
     if not risultato.punti:
         _LOGGER.debug("Nessun punto curva da importare per POD %s", pod)
-        return
+        return None
 
     statistic_id = _sanitize_statistic_id(pod)
     ore = _aggrega_per_ora(risultato.punti)
@@ -190,7 +197,12 @@ async def async_import_curva(
             )
         else:
             _LOGGER.debug("Nessun nuovo punto da importare per POD %s (già aggiornato)", pod)
-        return
+        # Nulla di nuovo importato ora, ma se c'erano già dati la data
+        # disponibile resta quella dell'ultimo punto presente: la restituiamo
+        # comunque, così il sensore non torna a "Sconosciuto".
+        if last_ts is not None:
+            return dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).date()
+        return None
 
     metadata = {
         "has_mean": False,
@@ -204,7 +216,15 @@ async def async_import_curva(
     }
 
     async_add_external_statistics(hass, metadata, stats)
-    _LOGGER.info("Importati %d punti curva per POD %s (%s)", len(stats), pod, statistic_id)
+    ultima_data = dt_util.as_local(stats[-1]["start"]).date()
+    _LOGGER.info(
+        "Importati %d punti curva per POD %s (%s), ultimo punto: %s",
+        len(stats),
+        pod,
+        statistic_id,
+        ultima_data.isoformat(),
+    )
+    return ultima_data
 
 
 async def async_get_ultima_data_disponibile(hass: HomeAssistant, pod: str):
