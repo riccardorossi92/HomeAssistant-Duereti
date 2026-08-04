@@ -66,6 +66,24 @@ class DuretiUltimoImportSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
         self._attr_device_info = _device_info_account(entry)
         self._ripristinato: str | None = None
 
+    @property
+    def available(self) -> bool:
+        """Sempre disponibile finché l'integrazione è caricata.
+
+        È un'entità del dispositivo "Account API", che rappresenta lo stato
+        della connessione a Duereti, non dei dati di un POD. Un fallimento nel
+        recupero dei dati (requestExport/requestResult bloccati dal WAF, file
+        non pronto, ecc.) riguarda il POD e non deve far sparire anche questa,
+        che è proprio dove si legge cosa è andato storto: gli attributi
+        `stato` e `ultimo_errore` restano così consultabili.
+
+        Se invece a fallire è l'autenticazione, il coordinator solleva
+        ConfigEntryAuthFailed: HA marca l'intera entry come da riautenticare
+        e le entità diventano comunque indisponibili, che è il comportamento
+        voluto per un problema di account.
+        """
+        return True
+
     async def async_added_to_hass(self) -> None:
         """Recupera l'ultimo valore noto dopo un riavvio.
 
@@ -110,6 +128,13 @@ class DuretiUltimaDataDisponibileSensor(CoordinatorEntity, RestoreEntity, Sensor
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.DATE
     _attr_icon = "mdi:calendar-check"
+
+    # Nessun override di `available`: vale il comportamento di
+    # CoordinatorEntity, cioè indisponibile quando l'ultimo aggiornamento è
+    # fallito. È voluto: questa è un'entità del dispositivo POD, e un
+    # fallimento nel recupero dati riguarda proprio i dati di quel POD. Chi
+    # guarda il POD deve accorgersi che qualcosa non va; il dettaglio
+    # dell'errore resta leggibile sul dispositivo "Account API".
 
     def __init__(self, coordinator, entry: ConfigEntry, pod: str) -> None:
         super().__init__(coordinator)
