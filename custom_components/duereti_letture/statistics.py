@@ -1,10 +1,16 @@
 """Import delle curve Duereti come external statistics in Home Assistant.
 
-Ricalca l'approccio già usato per HomeAssistant-OctopusEnergyIT:
-- statistic_id sanitizzato
-- StatisticMeanType.NONE (dato cumulativo, non media)
-- dedup tramite get_last_statistics per essere restart-safe
-- sum progressiva calcolata a partire dall'ultimo valore noto
+Punti chiave dell'implementazione:
+
+- i punti a 15 minuti del CSV vengono aggregati in bucket ORARI, perché le
+  external statistics di Home Assistant sono orarie;
+- l'aggregazione avviene sull'istante assoluto in UTC, così nell'ora ripetuta
+  del cambio ora i due intervalli con lo stesso orario locale restano distinti;
+- ad ogni import la serie esistente viene riletta, fusa con i nuovi dati e le
+  somme progressive ricalcolate da zero. Costa qualche migliaio di righe lette
+  per volta, ma rende irrilevante l'ordine di inserimento: senza, un recupero
+  storico di periodi anteriori a quelli già presenti verrebbe scartato o
+  produrrebbe salti artificiali nel grafico, dato che la somma è cumulativa.
 """
 from __future__ import annotations
 

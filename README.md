@@ -78,22 +78,18 @@ Limiti dichiarati dal manuale API: max 5 richieste in contemporanea, max
 
 ## Cosa fa una volta configurata
 
-I dati di un giorno risultano disponibili presso Duereti con circa **due
-giorni di ritardo** (verificato sul campo: il 3 agosto erano disponibili
-quelli del 1 agosto). La pianificazione è costruita attorno a questo.
+I dati di un giorno risultano disponibili presso Duereti il **giorno
+successivo** (verificato sul campo: la richiesta del 3 agosto, inviata la
+mattina del 4, è stata evasa alle 15 dello stesso giorno).
 
-**Fase 1 — import iniziale.** Alla prima configurazione richiede dal primo
-giorno del mese corrente fino a oggi-2, così hai subito qualcosa in
-dashboard. Se sei nei primissimi giorni del mese e oggi-2 cade ancora nel
-mese precedente, questa fase viene saltata.
-
-**Fase 2 — recupero storico.** Poi procede a ritroso in blocchi da 6 mesi
-(il massimo consentito da `requestExport`), senza aspettare tra un blocco e
-l'altro. Si ferma quando un blocco torna vuoto — segno che si è raggiunto
-l'inizio dello storico disponibile — oppure dopo 6 blocchi (3 anni), come
-limite di sicurezza.
-
-**Fase 3 — a regime.** Una volta al giorno richiede il solo giorno oggi-2.
+- **Il giorno dell'installazione non viene richiesto nulla:** il setup si
+  limita a validare le credenziali con `requestToken`.
+- **Dal giorno successivo, dopo le 10:00,** viene richiesto il giorno
+  precedente. Il controllo gira ogni ora, ma quasi sempre non fa nulla ed
+  esce subito: serve solo a intercettare la finestra delle 10:00
+  indipendentemente da quando Home Assistant è stato avviato.
+- **Lo storico non viene recuperato automaticamente:** si richiede quando
+  vuoi con l'azione `recupera_storico` (vedi sotto).
 
 I dati vengono importati come **external statistics**
 (`duereti_letture:<pod>_energia`), consultabili in **Impostazioni → Sistema →
@@ -115,6 +111,31 @@ per ogni POD.
 
 Il sensore *Attesa file* è utile per un'automazione di allerta: se resta alto
 per ore, qualcosa si è inceppato.
+
+Le entità dell'**Account API** restano disponibili anche quando il recupero
+dei dati fallisce: è lì che si leggono gli attributi `stato` e
+`ultimo_errore`, proprio quando servono. Vanno in errore solo se fallisce
+l'autenticazione, e in quel caso Home Assistant propone il reinserimento
+delle credenziali. Le entità del **POD** invece segnalano l'errore, perché
+un problema di recupero riguarda i dati di quel punto di prelievo.
+
+### Azione `duereti_letture.recupera_storico`
+
+Richiede un periodo passato e lo importa. Ogni richiesta può restare in coda
+per ore e le API accettano al massimo 6 mesi per volta, quindi sei tu a
+decidere quando e quanto recuperare; per periodi più lunghi ripeti l'azione su
+intervalli consecutivi.
+
+```yaml
+action: duereti_letture.recupera_storico
+data:
+  data_da: "2026-02-01"
+  data_a: "2026-07-31"
+```
+
+Il periodo viene validato subito, con un errore comprensibile in interfaccia
+invece di una richiesta che Duereti rifiuterebbe ore dopo: inizio successivo
+alla fine, fine oltre ieri, o periodo superiore ai 6 mesi consentiti.
 
 ### Azione `duereti_letture.recupera_ticket`
 

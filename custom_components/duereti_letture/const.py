@@ -5,7 +5,6 @@ DOMAIN = "duereti_letture"
 CONF_CLIENT_ID = "client_id"
 CONF_SECRET_ID = "secret_id"
 CONF_PODS = "pods"  # lista di dict: {"pod": "IT001...", "df": "RSSMRA..."} - df = dato fiscale (CF o P.IVA)
-CONF_MODE = "mode"  # "CURVE" o "LETTURE"
 # Data (ISO) del giorno in cui l'integrazione è stata configurata. Al primo
 # avvio non si richiedono dati: ci si limita a validare le credenziali, e le
 # richieste giornaliere partono dal giorno successivo.
@@ -48,6 +47,8 @@ RIAVVIO_RETRY_ATTEMPTS = 3
 RIAVVIO_RETRY_WAIT_SECONDS = 20
 
 MODE_CURVE = "CURVE"
+# Non usata dall'integrazione (che importa solo le curve): resta come
+# riferimento al protocollo, ed è la modalità gestita da parse_letture_zip.
 MODE_LETTURE = "LETTURE"
 
 # Polling di requestResult: il job è schedulato lato Duereti e può richiedere
@@ -67,9 +68,13 @@ RESULT_POLL_MAX_ATTEMPTS = 12  # ~6 ore totali di attesa massima
 DEFAULT_SCAN_INTERVAL_HOURS = 1
 
 ESITO_OK = 0
+# Non usata: il codice verifica esito != ESITO_OK. Documentata per
+# completezza, il manuale definisce solo questi due valori.
 ESITO_ERRORE = 1
 
-# Limiti dichiarati dal manuale (sezione requestExport)
+# Limiti dichiarati dal manuale (sezione requestExport). Non imposti dal
+# codice: l'integrazione fa una richiesta per volta, quindi il limite di
+# concorrenza non è raggiungibile. Documentato per chi legge.
 MAX_CONCURRENT_REQUESTS = 5
 MAX_SUPPLY_POINTS_PER_REQUEST = 200
 MAX_DATE_RANGE_MONTHS = 6

@@ -4,12 +4,13 @@ A differenza di test_api.py, questi richiedono Home Assistant installato
 (coordinator.py importa homeassistant.*), quindi vanno eseguiti in un
 ambiente con pytest-homeassistant-custom-component (vedi requirements_test.txt).
 """
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 from custom_components.duereti_letture.const import (
     MAX_DATE_RANGE_MONTHS,
+    ORA_MINIMA_RICHIESTA,
     RITARDO_DATI_GIORNI,
 )
 from custom_components.duereti_letture.coordinator import (
@@ -40,8 +41,6 @@ class TestInizioNMesiPrima:
     def test_blocchi_consecutivi_non_lasciano_buchi(self):
         """Simula il recupero storico: ogni blocco deve iniziare il giorno
         dopo la fine del blocco precedente, senza sovrapposizioni né buchi."""
-        from datetime import timedelta
-
         fine = date(2026, 7, 31)
         confine_precedente = None
         for _ in range(4):
@@ -85,13 +84,17 @@ class TestMesePrecedenteCompleto:
 
 class TestRitardoDati:
     """Il ritardo con cui Duereti rende disponibili i dati, verificato sul
-    campo: il 3 agosto erano disponibili quelli del 1 agosto."""
+    campo: la richiesta del 3 agosto, inviata la mattina del 4, è stata evasa
+    alle 15 dello stesso 4 agosto."""
 
-    def test_il_ritardo_e_di_due_giorni(self):
-        assert RITARDO_DATI_GIORNI == 2
+    def test_il_ritardo_e_di_un_giorno(self):
+        assert RITARDO_DATI_GIORNI == 1
 
     def test_giorno_richiesto_a_regime(self):
-        from datetime import timedelta
+        oggi = date(2026, 8, 4)
+        assert oggi - timedelta(days=RITARDO_DATI_GIORNI) == date(2026, 8, 3)
 
-        oggi = date(2026, 8, 3)
-        assert oggi - timedelta(days=RITARDO_DATI_GIORNI) == date(2026, 8, 1)
+    def test_non_si_chiede_prima_delle_dieci(self):
+        """Le richieste partono solo dopo ORA_MINIMA_RICHIESTA: prima i dati
+        del giorno precedente non risultano ancora pronti."""
+        assert ORA_MINIMA_RICHIESTA == 10

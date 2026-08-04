@@ -429,14 +429,6 @@ class DuretiApiClient:
         except Exception as err:  # noqa: BLE001
             raise DuretiApiError("Impossibile decodificare il campo File come base64") from err
 
-    async def get_curve(
-        self, data_da: date, data_a: date, pods: list[dict]
-    ) -> dict[str, RisultatoLetture]:
-        """Orchestrazione completa: prenota ed estrae le curve per i POD indicati."""
-        ticket = await self.request_export(data_da, data_a, pods, mode=MODE_CURVE)
-        zip_bytes = await self.request_result(ticket)
-        return parse_curve_zip(zip_bytes)
-
 
 @dataclass
 class LetturaRiga:

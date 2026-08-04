@@ -13,10 +13,10 @@ Uso:
     python test_duereti.py --pod IT001E12345678 --df RSSMRA80A01F205X \
         --data-da 2026-06-01 --data-a 2026-06-30 --mode CURVE
 
-NOTA: le curve/misure vengono probabilmente validate e chiuse a fine mese,
-non giorno per giorno. Richiedere un giorno del mese ancora in corso rischia
-di far restare il job in coda a tempo indeterminato perché quei dati
-semplicemente non esistono ancora - usa un range su un mese già concluso.
+NOTA: i dati di un giorno risultano disponibili il giorno successivo
+(verificato: richiesta del 3 agosto evasa il 4). Richiedere il giorno corrente
+lascia il job in coda perché quei dati non esistono ancora. Il range massimo
+per richiesta è di 6 mesi.
 
 Il file risultato viene salvato in ./output/ sia come .zip grezzo che come
 elenco/estratto dei file interni, cosi' puoi confrontare i nomi colonna reali
