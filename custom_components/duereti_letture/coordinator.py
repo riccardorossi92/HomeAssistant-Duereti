@@ -183,6 +183,14 @@ class DuretiCoordinator(DataUpdateCoordinator):
             name=f"{DOMAIN}_poll_import_forzato_{ticket}",
         )
 
+    def _segna_import_iniziale_fatto(self) -> None:
+        """Marca la fase iniziale come conclusa sulla config entry."""
+        if self._entry.data.get(CONF_IMPORT_INIZIALE_FATTO):
+            return
+        self.hass.config_entries.async_update_entry(
+            self._entry, data={**self._entry.data, CONF_IMPORT_INIZIALE_FATTO: True}
+        )
+
     def _fase_da_entry(self) -> str:
         """Legge la fase del ticket pendente dalla config entry.
 
@@ -283,31 +291,57 @@ class DuretiCoordinator(DataUpdateCoordinator):
                 }
             )
 
-        fase, data_da, data_a = self._prossima_richiesta()
-        if fase is None:
+        # Ciclo (al massimo quante sono le fasi) perché una fase può risultare
+        # già soddisfatta: in quel caso non basta uscire, va marcata come
+        # conclusa e si passa alla successiva. Senza questo, un import fatto
+        # per altre vie - per esempio forzando un ticket con l'azione
+        # recupera_ticket - lascerebbe la fase iniziale eternamente "da fare",
+        # bloccando l'avvio del recupero storico.
+        for _ in range(3):
+            fase, data_da, data_a = self._prossima_richiesta()
+            if fase is None:
+                return await self._con_ultime_date(
+                    self.data or {"stato": "nessuna richiesta necessaria al momento"}
+                )
+
+            chiave = f"{fase}:{data_da.isoformat()}_{data_a.isoformat()}"
+
+            if chiave == self._ultima_richiesta:
+                _LOGGER.debug(
+                    "Periodo %s già richiesto (in questa sessione), nessuna nuova richiesta",
+                    chiave,
+                )
+                return await self._con_ultime_date(
+                    self.data or {"stato": f"periodo {chiave} già richiesto"}
+                )
+
+            # Il controllo sui dati già presenti vale solo per le fasi che
+            # guardano avanti nel tempo. Nel backfill si richiedono periodi
+            # ANTERIORI a quelli già importati: lì il controllo direbbe sempre
+            # "già coperto" e bloccherebbe tutto il recupero storico.
+            if fase != FASE_BACKFILL and await self._periodo_gia_coperto(data_a):
+                if fase == FASE_INIZIALE:
+                    _LOGGER.info(
+                        "Fase iniziale già soddisfatta dai dati presenti (fino al %s): "
+                        "la marco come conclusa e passo al recupero storico",
+                        data_a,
+                    )
+                    self._segna_import_iniziale_fatto()
+                    continue  # rivaluta: ora toccherà al backfill
+
+                _LOGGER.debug(
+                    "Periodo %s già coperto dalle statistiche esistenti: nessuna richiesta",
+                    chiave,
+                )
+                self._ultima_richiesta = chiave
+                return await self._con_ultime_date(
+                    self.data or {"stato": f"periodo {chiave} già coperto dai dati esistenti"}
+                )
+
+            break
+        else:
             return await self._con_ultime_date(
                 self.data or {"stato": "nessuna richiesta necessaria al momento"}
-            )
-
-        chiave = f"{fase}:{data_da.isoformat()}_{data_a.isoformat()}"
-
-        if chiave == self._ultima_richiesta:
-            _LOGGER.debug("Periodo %s già richiesto (in questa sessione), nessuna nuova richiesta", chiave)
-            return await self._con_ultime_date(
-                self.data or {"stato": f"periodo {chiave} già richiesto"}
-            )
-
-        # Il controllo sui dati già presenti vale solo per le fasi che
-        # guardano avanti nel tempo. Nel backfill si richiedono periodi
-        # ANTERIORI a quelli già importati: lì il controllo direbbe sempre
-        # "già coperto" e bloccherebbe tutto il recupero storico.
-        if fase != FASE_BACKFILL and await self._periodo_gia_coperto(data_a):
-            _LOGGER.debug(
-                "Periodo %s già coperto dalle statistiche esistenti: nessuna richiesta", chiave
-            )
-            self._ultima_richiesta = chiave
-            return await self._con_ultime_date(
-                self.data or {"stato": f"periodo {chiave} già coperto dai dati esistenti"}
             )
 
         try:
@@ -421,6 +455,10 @@ class DuretiCoordinator(DataUpdateCoordinator):
         l'utente non fosse intervenuto.
         """
         if fase == FASE_MANUALE:
+            # L'import manuale non decide le fasi, ma i dati che ha portato
+            # possono averne soddisfatta una: rivalutiamo subito, invece di
+            # aspettare il ciclo successivo (24 ore).
+            self.hass.async_create_task(self.async_request_refresh())
             return
 
         nuovi_dati = dict(self._entry.data)
