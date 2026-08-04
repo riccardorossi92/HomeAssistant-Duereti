@@ -1,4 +1,4 @@
-"""Test per la logica delle date in coordinator.py.
+"""Test per la logica di date e pianificazione in coordinator.py.
 
 A differenza di test_api.py, questi richiedono Home Assistant installato
 (coordinator.py importa homeassistant.*), quindi vanno eseguiti in un
@@ -6,52 +6,92 @@ ambiente con pytest-homeassistant-custom-component (vedi requirements_test.txt).
 """
 from datetime import date
 
+import pytest
+
+from custom_components.duereti_letture.const import (
+    MAX_DATE_RANGE_MONTHS,
+    RITARDO_DATI_GIORNI,
+)
 from custom_components.duereti_letture.coordinator import (
+    _inizio_n_mesi_prima,
     _mese_precedente_completo,
-    _range_sei_mesi_precedenti,
 )
 
 
-def test_mese_precedente_completo_caso_normale():
-    inizio, fine = _mese_precedente_completo(date(2026, 8, 2))
-    assert inizio == date(2026, 7, 1)
-    assert fine == date(2026, 7, 31)
+class TestInizioNMesiPrima:
+    """_inizio_n_mesi_prima calcola l'inizio di un blocco di N mesi che
+    termina in una data data. È il cuore del recupero storico a ritroso."""
+
+    @pytest.mark.parametrize("n_mesi", range(1, MAX_DATE_RANGE_MONTHS + 1))
+    def test_copre_esattamente_n_mesi(self, n_mesi):
+        fine = date(2026, 7, 31)
+        inizio = _inizio_n_mesi_prima(fine, n_mesi)
+        mesi_coperti = (fine.year - inizio.year) * 12 + (fine.month - inizio.month) + 1
+        assert mesi_coperti == n_mesi
+        assert inizio.day == 1
+
+    def test_un_mese_coincide_col_mese_di_fine(self):
+        assert _inizio_n_mesi_prima(date(2026, 7, 31), 1) == date(2026, 7, 1)
+
+    def test_attraversa_il_cambio_di_anno(self):
+        # 6 mesi che finiscono a fine febbraio 2026 partono da settembre 2025
+        assert _inizio_n_mesi_prima(date(2026, 2, 28), 6) == date(2025, 9, 1)
+
+    def test_blocchi_consecutivi_non_lasciano_buchi(self):
+        """Simula il recupero storico: ogni blocco deve iniziare il giorno
+        dopo la fine del blocco precedente, senza sovrapposizioni né buchi."""
+        from datetime import timedelta
+
+        fine = date(2026, 7, 31)
+        confine_precedente = None
+        for _ in range(4):
+            inizio = _inizio_n_mesi_prima(fine, MAX_DATE_RANGE_MONTHS)
+            if confine_precedente is not None:
+                assert fine + timedelta(days=1) == confine_precedente
+            confine_precedente = inizio
+            fine = inizio - timedelta(days=1)
+
+    def test_non_supera_mai_il_limite_dell_api(self):
+        """Il manuale Duereti impone un range massimo di 6 mesi per
+        requestExport: verifichiamo di restare al limite, mai oltre."""
+        fine = date(2026, 8, 1)
+        inizio = _inizio_n_mesi_prima(fine, MAX_DATE_RANGE_MONTHS)
+        mesi_di_range = (fine.year - inizio.year) * 12 + (fine.month - inizio.month)
+        assert mesi_di_range <= MAX_DATE_RANGE_MONTHS
 
 
-def test_mese_precedente_completo_cambio_anno():
-    inizio, fine = _mese_precedente_completo(date(2026, 1, 15))
-    assert inizio == date(2025, 12, 1)
-    assert fine == date(2025, 12, 31)
+class TestMesePrecedenteCompleto:
+    """Usata solo come default per l'azione recupera_ticket quando l'utente
+    non indica le date."""
+
+    def test_caso_normale(self):
+        assert _mese_precedente_completo(date(2026, 8, 2)) == (
+            date(2026, 7, 1),
+            date(2026, 7, 31),
+        )
+
+    def test_cambio_anno(self):
+        assert _mese_precedente_completo(date(2026, 1, 15)) == (
+            date(2025, 12, 1),
+            date(2025, 12, 31),
+        )
+
+    def test_febbraio_bisestile(self):
+        assert _mese_precedente_completo(date(2028, 3, 1)) == (
+            date(2028, 2, 1),
+            date(2028, 2, 29),
+        )
 
 
-def test_mese_precedente_completo_febbraio_bisestile():
-    # 2028 e' bisestile: marzo 2028 -> mese precedente e' febbraio con 29 giorni
-    inizio, fine = _mese_precedente_completo(date(2028, 3, 1))
-    assert inizio == date(2028, 2, 1)
-    assert fine == date(2028, 2, 29)
+class TestRitardoDati:
+    """Il ritardo con cui Duereti rende disponibili i dati, verificato sul
+    campo: il 3 agosto erano disponibili quelli del 1 agosto."""
 
+    def test_il_ritardo_e_di_due_giorni(self):
+        assert RITARDO_DATI_GIORNI == 2
 
-def test_range_sei_mesi_precedenti_copre_esattamente_sei_mesi():
-    inizio, fine = _range_sei_mesi_precedenti(date(2026, 8, 2))
-    n_mesi = (fine.year - inizio.year) * 12 + (fine.month - inizio.month) + 1
-    assert n_mesi == 6
-    assert inizio == date(2026, 2, 1)
-    assert fine == date(2026, 7, 31)
+    def test_giorno_richiesto_a_regime(self):
+        from datetime import timedelta
 
-
-def test_range_sei_mesi_precedenti_cambio_anno():
-    inizio, fine = _range_sei_mesi_precedenti(date(2026, 3, 1))
-    n_mesi = (fine.year - inizio.year) * 12 + (fine.month - inizio.month) + 1
-    assert n_mesi == 6
-    assert inizio == date(2025, 9, 1)
-    assert fine == date(2026, 2, 28)
-
-
-def test_range_sei_mesi_precedenti_rispetta_limite_api():
-    """Il manuale Duereti impone un range massimo di 6 mesi per requestExport:
-    verifichiamo di restare esattamente al limite, mai oltre."""
-    from custom_components.duereti_letture.const import MAX_DATE_RANGE_MONTHS
-
-    inizio, fine = _range_sei_mesi_precedenti(date(2026, 8, 2))
-    n_mesi_range = (fine.year - inizio.year) * 12 + (fine.month - inizio.month)
-    assert n_mesi_range <= MAX_DATE_RANGE_MONTHS
+        oggi = date(2026, 8, 3)
+        assert oggi - timedelta(days=RITARDO_DATI_GIORNI) == date(2026, 8, 1)

@@ -78,15 +78,62 @@ Limiti dichiarati dal manuale API: max 5 richieste in contemporanea, max
 
 ## Cosa fa una volta configurata
 
-- Ogni giorno controlla se il **mese precedente completo** è già stato
-  richiesto; se non lo è ancora, lo richiede (le curve/misure vengono
-  probabilmente validate e chiuse a fine mese, non giorno per giorno —
-  chiedere un giorno del mese in corso rischia di far restare il job in
-  coda a tempo indeterminato perché quei dati non esistono ancora)
-- Importa i dati come **external statistics** (`duereti_letture:<pod>_energia`),
-  consultabili in **Impostazioni → Statistiche del sistema** o nella
-  Energy Dashboard
-- Espone un sensore diagnostico con la data dell'ultimo import riuscito
+I dati di un giorno risultano disponibili presso Duereti con circa **due
+giorni di ritardo** (verificato sul campo: il 3 agosto erano disponibili
+quelli del 1 agosto). La pianificazione è costruita attorno a questo.
+
+**Fase 1 — import iniziale.** Alla prima configurazione richiede dal primo
+giorno del mese corrente fino a oggi-2, così hai subito qualcosa in
+dashboard. Se sei nei primissimi giorni del mese e oggi-2 cade ancora nel
+mese precedente, questa fase viene saltata.
+
+**Fase 2 — recupero storico.** Poi procede a ritroso in blocchi da 6 mesi
+(il massimo consentito da `requestExport`), senza aspettare tra un blocco e
+l'altro. Si ferma quando un blocco torna vuoto — segno che si è raggiunto
+l'inizio dello storico disponibile — oppure dopo 6 blocchi (3 anni), come
+limite di sicurezza.
+
+**Fase 3 — a regime.** Una volta al giorno richiede il solo giorno oggi-2.
+
+I dati vengono importati come **external statistics**
+(`duereti_letture:<pod>_energia`), consultabili in **Impostazioni → Sistema →
+Statistiche** e utilizzabili nella Energy Dashboard.
+
+### Entità esposte
+
+Tutte diagnostiche: i consumi veri stanno nelle statistiche, non in un
+sensore. Sono raggruppate in un dispositivo "Account API" più un dispositivo
+per ogni POD.
+
+| Entità | Dispositivo | Cosa mostra |
+|---|---|---|
+| Ultimo import | Account | Fine del periodo dell'ultimo import riuscito |
+| Attesa file (minuti) | Account | Da quanto è in corso il polling di `requestResult`; `0` se non c'è nulla in coda |
+| POD configurati | Account | Quanti POD in questa istanza |
+| Ultima data disponibile | POD | Ultimo giorno per cui esistono davvero dati importati |
+| Consumo ultimo periodo | POD | kWh totali dell'ultimo periodo importato |
+
+Il sensore *Attesa file* è utile per un'automazione di allerta: se resta alto
+per ore, qualcosa si è inceppato.
+
+### Azione `duereti_letture.recupera_ticket`
+
+Riprende un ticket già esistente e ne avvia direttamente il polling, saltando
+`requestExport`. Serve quando hai ottenuto un ticket per altre vie (una
+chiamata manuale con curl o Bruno) o vuoi riprenderne uno ancora valido,
+evitando proprio la chiamata che il WAF blocca più spesso.
+
+```yaml
+action: duereti_letture.recupera_ticket
+data:
+  ticket: XXXXXXXXXXXXXXXXXXXXXX
+  data_da: "2026-07-01"   # opzionale
+  data_a: "2026-07-31"    # opzionale
+```
+
+Le date sono solo un'etichetta per i sensori diagnostici: i dati importati
+arrivano interamente dal file. `entry_id` serve solo con più istanze
+configurate.
 
 ## Note tecniche / limiti noti
 
@@ -99,6 +146,55 @@ Limiti dichiarati dal manuale API: max 5 richieste in contemporanea, max
   decimali con virgola, timestamp a intervalli di 15 minuti. Viene importato
   solo `ATTIVA_PRELEVATA` (consumo); `ATTIVA_IMMESSA` (produzione, es.
   fotovoltaico) non è ancora gestita
+- I quarti d'ora vengono **aggregati per ora**, perché le external statistics
+  di Home Assistant sono orarie
+- Ad ogni import la serie esistente viene riletta, fusa con i nuovi dati e le
+  somme progressive ricalcolate da zero. Costa qualche migliaio di righe
+  lette per volta, ma rende irrilevante l'ordine di inserimento: senza,
+  il recupero storico a ritroso sarebbe impossibile (la somma è cumulativa)
+
+### Il blocco intermittente del WAF
+
+Le chiamate alle API vengono rifiutate a intermittenza da un WAF (F5 BIG-IP)
+con una pagina HTML `Request Rejected` restituita con **HTTP 200**, al posto
+del JSON atteso. Succede su tutte e tre le chiamate, indipendentemente da
+rete e credenziali, e non è aggirabile lato client: è un problema lato
+Duereti, per il quale è aperta una segnalazione.
+
+L'integrazione è costruita per conviverci:
+
+- un fallimento del recupero dati non fa fallire l'integrazione, solo il
+  singolo aggiornamento; Home Assistant riprova da solo
+- il ticket ottenuto viene salvato in modo persistente e ripreso dopo
+  riavvii, reload o errori: viene scartato solo se Duereti lo dichiara
+  esplicitamente non valido (404) o dopo un import riuscito
+- un blocco durante il polling è trattato come transitorio, senza perdere il
+  ticket
+
+### Ora legale
+
+La colonna `FL_ORA_LEGALE` viene usata per costruire timestamp con l'offset
+UTC corretto, così nell'ora ripetuta di fine ottobre i due intervalli con lo
+stesso orario locale restano distinti. **Attenzione:** la mappatura dei
+valori (`2` = ora legale, `1` = ora solare) è un'inferenza — negli export
+osservati finora, tutti in ora legale, il valore era sempre `2` — e non è
+documentata nel manuale. Su un valore inatteso si ricade sul fuso locale con
+un warning nei log.
+
+### Diagnostica
+
+Per vedere esattamente quali chiamate vengono fatte e cosa risponde Duereti:
+
+```yaml
+logger:
+  default: warning
+  logs:
+    custom_components.duereti_letture: debug
+```
+
+Vengono loggati URL, header, body inviato e risposta grezza di ogni
+chiamata. Credenziali e token sono oscurati, quindi i log si possono
+condividere per chiedere supporto.
 
 ### Codici di errore documentati dal manuale
 
@@ -143,3 +239,7 @@ requirements) perché importano moduli che dipendono da `homeassistant.*`.
 Manuale ufficiale Duereti: *"Manuale d'uso – API per Estrazione Curve e
 Letture"*, disponibile dal PCF nella stessa sezione da cui si richiede
 l'abilitazione.
+
+## Licenza
+
+MIT — vedi [LICENSE](LICENSE).
