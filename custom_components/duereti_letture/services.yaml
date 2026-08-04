@@ -42,3 +42,38 @@ recupera_ticket:
       required: false
       selector:
         text:
+
+recupera_storico:
+  name: Recupera storico
+  description: >-
+    Richiede a Duereti i dati di un periodo passato e li importa. Il recupero
+    dello storico non è automatico: ogni richiesta può restare in coda per ore
+    e le API accettano al massimo 6 mesi per volta, quindi sei tu a decidere
+    quando e quanto recuperare. Per periodi più lunghi ripeti l'azione su
+    intervalli consecutivi. Se c'è già un recupero in corso viene annullato.
+  fields:
+    data_da:
+      name: Data inizio
+      description: >-
+        Primo giorno del periodo da recuperare. Non può essere anteriore a 6
+        mesi prima della data di fine.
+      required: true
+      example: "2026-02-01"
+      selector:
+        date:
+    data_a:
+      name: Data fine
+      description: >-
+        Ultimo giorno del periodo da recuperare. I dati sono disponibili con un
+        giorno di ritardo, quindi al massimo ieri.
+      required: true
+      example: "2026-07-31"
+      selector:
+        date:
+    entry_id:
+      name: ID configurazione
+      description: >-
+        Necessario solo se hai più istanze dell'integrazione configurate.
+      required: false
+      selector:
+        text:

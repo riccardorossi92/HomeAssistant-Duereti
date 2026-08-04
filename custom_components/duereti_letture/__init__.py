@@ -20,6 +20,15 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 SERVICE_RECUPERA_TICKET = "recupera_ticket"
+SERVICE_RECUPERA_STORICO = "recupera_storico"
+
+SCHEMA_RECUPERA_STORICO = vol.Schema(
+    {
+        vol.Required("data_da"): cv.date,
+        vol.Required("data_a"): cv.date,
+        vol.Optional("entry_id"): cv.string,
+    }
+)
 
 SCHEMA_RECUPERA_TICKET = vol.Schema(
     {
@@ -58,7 +67,7 @@ def _trova_coordinator(hass: HomeAssistant, entry_id: str | None) -> DuretiCoord
 
 async def _async_registra_servizi(hass: HomeAssistant) -> None:
     """Registra le azioni dell'integrazione (una sola volta)."""
-    if hass.services.has_service(DOMAIN, SERVICE_RECUPERA_TICKET):
+    if hass.services.has_service(DOMAIN, SERVICE_RECUPERA_STORICO):
         return
 
     async def _recupera_ticket(call: ServiceCall) -> None:
@@ -67,8 +76,15 @@ async def _async_registra_servizi(hass: HomeAssistant) -> None:
         data_a: date | None = call.data.get("data_a")
         await coordinator.async_forza_ticket(call.data["ticket"], data_da, data_a)
 
+    async def _recupera_storico(call: ServiceCall) -> None:
+        coordinator = _trova_coordinator(hass, call.data.get("entry_id"))
+        await coordinator.async_recupera_storico(call.data["data_da"], call.data["data_a"])
+
     hass.services.async_register(
         DOMAIN, SERVICE_RECUPERA_TICKET, _recupera_ticket, schema=SCHEMA_RECUPERA_TICKET
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_RECUPERA_STORICO, _recupera_storico, schema=SCHEMA_RECUPERA_STORICO
     )
 
 
@@ -123,4 +139,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # va rimosso solo quando non resta più nessuna istanza.
         if not hass.data[DOMAIN]:
             hass.services.async_remove(DOMAIN, SERVICE_RECUPERA_TICKET)
+            hass.services.async_remove(DOMAIN, SERVICE_RECUPERA_STORICO)
     return unload_ok

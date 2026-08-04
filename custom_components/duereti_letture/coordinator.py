@@ -7,26 +7,27 @@ from datetime import date, datetime, timedelta
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    HomeAssistantError,
+    ServiceValidationError,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .api import DuretiApiClient, DuretiApiError, DuretiAuthError, DuretiNotFoundError
 from .const import (
-    CONF_BACKFILL_COMPLETATO,
-    CONF_BACKFILL_PROSSIMA_FINE,
-    CONF_BLOCCHI_BACKFILL_FATTI,
-    CONF_IMPORT_INIZIALE_FATTO,
+    CONF_DATA_INSTALLAZIONE,
     CONF_PENDING_DATA_A,
     CONF_PENDING_DATA_DA,
     CONF_PENDING_IS_BACKFILL,
     CONF_PENDING_TICKET,
     DEFAULT_SCAN_INTERVAL_HOURS,
     DOMAIN,
-    MAX_BLOCCHI_BACKFILL,
     MAX_DATE_RANGE_MONTHS,
     MODE_CURVE,
+    ORA_MINIMA_RICHIESTA,
     RITARDO_DATI_GIORNI,
 )
 from .statistics import async_get_ultima_data_disponibile, async_import_curva
@@ -34,9 +35,9 @@ from .statistics import async_get_ultima_data_disponibile, async_import_curva
 _LOGGER = logging.getLogger(__name__)
 
 # Fasi della pianificazione, vedi DuretiCoordinator._prossima_richiesta
-FASE_INIZIALE = "iniziale"
-FASE_BACKFILL = "backfill"
 FASE_GIORNALIERO = "giornaliero"
+# Recupero storico avviato a mano con l'azione recupera_storico.
+FASE_STORICO = "storico"
 # Ticket forzato dall'utente con l'azione recupera_ticket: importa i dati ma
 # non fa avanzare lo stato delle fasi automatiche.
 FASE_MANUALE = "manuale"
@@ -183,79 +184,130 @@ class DuretiCoordinator(DataUpdateCoordinator):
             name=f"{DOMAIN}_poll_import_forzato_{ticket}",
         )
 
-    def _segna_import_iniziale_fatto(self) -> None:
-        """Marca la fase iniziale come conclusa sulla config entry."""
-        if self._entry.data.get(CONF_IMPORT_INIZIALE_FATTO):
-            return
+    async def async_recupera_storico(self, data_da: date, data_a: date) -> None:
+        """Avvia manualmente il recupero di un periodo storico.
+
+        Il recupero dello storico non è automatico: le API Duereti accettano
+        al massimo 6 mesi per richiesta e ogni richiesta può restare in coda
+        per ore, quindi è l'utente a decidere quando e quanto recuperare.
+
+        Solleva ServiceValidationError se il periodo non è valido: meglio un
+        errore immediato e comprensibile in interfaccia che una richiesta che
+        Duereti rifiuterebbe ore dopo.
+        """
+        if data_da > data_a:
+            raise ServiceValidationError(
+                f"La data di inizio ({data_da}) è successiva a quella di fine ({data_a})."
+            )
+
+        ultimo_utile = date.today() - timedelta(days=RITARDO_DATI_GIORNI)
+        if data_a > ultimo_utile:
+            raise ServiceValidationError(
+                f"La data di fine ({data_a}) è troppo recente: i dati sono disponibili con "
+                f"un giorno di ritardo, quindi al massimo fino al {ultimo_utile}."
+            )
+
+        limite = _inizio_n_mesi_prima(data_a, MAX_DATE_RANGE_MONTHS)
+        if data_da < limite:
+            raise ServiceValidationError(
+                f"Il periodo richiesto supera il limite di {MAX_DATE_RANGE_MONTHS} mesi "
+                f"imposto dalle API Duereti. Con fine {data_a} l'inizio non può essere "
+                f"anteriore al {limite}. Per recuperare più storico ripeti l'azione su "
+                f"periodi consecutivi."
+            )
+
+        if self._background_task and not self._background_task.done():
+            _LOGGER.warning(
+                "Annullo il recupero in corso (ticket %s) per avviare lo storico %s - %s",
+                self.pending_ticket or "sconosciuto",
+                data_da,
+                data_a,
+            )
+            self._background_task.cancel()
+
+        _LOGGER.info("Recupero storico avviato manualmente: %s - %s", data_da, data_a)
+
+        try:
+            ticket = await self.api.request_export(data_da, data_a, self._pods, mode=MODE_CURVE)
+        except DuretiApiError as err:
+            raise HomeAssistantError(
+                f"Duereti non ha accettato la richiesta per {data_da} - {data_a}: {err}"
+            ) from err
+
+        self.pending_since = dt_util.utcnow()
+        self.pending_ticket = ticket
         self.hass.config_entries.async_update_entry(
-            self._entry, data={**self._entry.data, CONF_IMPORT_INIZIALE_FATTO: True}
+            self._entry,
+            data={
+                **self._entry.data,
+                CONF_PENDING_TICKET: ticket,
+                CONF_PENDING_DATA_DA: data_da.isoformat(),
+                CONF_PENDING_DATA_A: data_a.isoformat(),
+                CONF_PENDING_IS_BACKFILL: FASE_STORICO,
+            },
+        )
+        self._background_task = self.hass.async_create_background_task(
+            self._poll_and_import(ticket, data_da, data_a, fase=FASE_STORICO),
+            name=f"{DOMAIN}_recupero_storico_{data_da}_{data_a}",
         )
 
     def _fase_da_entry(self) -> str:
         """Legge la fase del ticket pendente dalla config entry.
 
-        Retrocompatibile con le versioni che ci salvavano un booleano
-        (True = backfill) invece del nome della fase.
+        Retrocompatibile con le versioni che salvavano un booleano o nomi di
+        fasi non più esistenti: in dubbio si ricade su giornaliero.
         """
         valore = self._entry.data.get(CONF_PENDING_IS_BACKFILL)
-        if isinstance(valore, bool):
-            return FASE_BACKFILL if valore else FASE_GIORNALIERO
-        return valore or FASE_GIORNALIERO
+        if isinstance(valore, str) and valore in (FASE_GIORNALIERO, FASE_STORICO, FASE_MANUALE):
+            return valore
+        return FASE_GIORNALIERO
 
     def _prossima_richiesta(self) -> tuple[str | None, date, date]:
-        """Decide cosa chiedere a Duereti in questo ciclo.
+        """Decide se c'è qualcosa da chiedere a Duereti in questo ciclo.
 
-        Tre fasi, in ordine di priorità:
+        - Il giorno stesso dell'installazione non si richiede nulla: il setup
+          si limita a validare le credenziali con requestToken.
+        - Dal giorno successivo, e solo dopo ORA_MINIMA_RICHIESTA, si chiede
+          il giorno oggi-RITARDO_DATI_GIORNI.
 
-        1. INIZIALE - alla prima configurazione: dal primo giorno del mese
-           corrente fino a oggi-2 (i dati arrivano con un paio di giorni di
-           ritardo). Dà subito qualcosa da vedere in dashboard. Se siamo nei
-           primissimi giorni del mese e oggi-2 cade nel mese precedente, non
-           c'è nulla da chiedere per il mese corrente e si passa direttamente
-           al backfill; la fase iniziale verrà comunque saltata da lì in poi,
-           perché il backfill copre quel periodo.
-
-        2. BACKFILL - a ritroso, un blocco di 6 mesi per volta (il massimo
-           consentito da requestExport), partendo dal giorno prima del punto
-           già coperto. Si ferma quando Duereti non restituisce più dati o al
-           raggiungimento di MAX_BLOCCHI_BACKFILL.
-
-        3. GIORNALIERO - a regime: solo il giorno oggi-2.
+        Il recupero dello storico non è automatico: si avvia a mano con
+        l'azione duereti_letture.recupera_storico.
 
         Restituisce (fase, data_da, data_a); fase è None se non c'è nulla da
-        chiedere.
+        chiedere adesso.
         """
         oggi = date.today()
-        recente = oggi - timedelta(days=RITARDO_DATI_GIORNI)
-        primo_del_mese = oggi.replace(day=1)
+        installazione = self._entry.data.get(CONF_DATA_INSTALLAZIONE)
 
-        if not self._entry.data.get(CONF_IMPORT_INIZIALE_FATTO):
-            if recente >= primo_del_mese:
-                return FASE_INIZIALE, primo_del_mese, recente
-            # Inizio mese: il giorno più recente disponibile appartiene ancora
-            # al mese scorso, quindi non c'è un "mese corrente" da chiedere.
-            _LOGGER.debug(
-                "Fase iniziale saltata: oggi-%d (%s) precede il primo del mese (%s), "
-                "passo direttamente al backfill",
-                RITARDO_DATI_GIORNI,
-                recente,
-                primo_del_mese,
+        if not installazione:
+            self.hass.config_entries.async_update_entry(
+                self._entry,
+                data={**self._entry.data, CONF_DATA_INSTALLAZIONE: oggi.isoformat()},
             )
+            _LOGGER.info(
+                "Primo avvio: credenziali validate, nessuna richiesta di dati oggi. Le "
+                "richieste giornaliere partiranno da domani dopo le %d:00. Per recuperare "
+                "lo storico usa l'azione duereti_letture.recupera_storico.",
+                ORA_MINIMA_RICHIESTA,
+            )
+            return None, oggi, oggi
 
-        if not self._entry.data.get(CONF_BACKFILL_COMPLETATO):
-            fine_str = self._entry.data.get(CONF_BACKFILL_PROSSIMA_FINE)
-            if fine_str:
-                fine = date.fromisoformat(fine_str)
-            elif recente >= primo_del_mese:
-                # La fase iniziale ha già coperto il mese corrente: si riparte
-                # dall'ultimo giorno del mese precedente.
-                fine = primo_del_mese - timedelta(days=1)
-            else:
-                # Nessun dato del mese corrente: si parte da oggi-2.
-                fine = recente
-            return FASE_BACKFILL, _inizio_n_mesi_prima(fine, MAX_DATE_RANGE_MONTHS), fine
+        if oggi <= date.fromisoformat(installazione):
+            _LOGGER.debug("Giorno dell'installazione: nessuna richiesta di dati")
+            return None, oggi, oggi
 
-        return FASE_GIORNALIERO, recente, recente
+        adesso = dt_util.now()
+        if adesso.hour < ORA_MINIMA_RICHIESTA:
+            _LOGGER.debug(
+                "Sono le %02d:%02d, attendo le %d:00 prima di chiedere i dati di ieri",
+                adesso.hour,
+                adesso.minute,
+                ORA_MINIMA_RICHIESTA,
+            )
+            return None, oggi, oggi
+
+        giorno = oggi - timedelta(days=RITARDO_DATI_GIORNI)
+        return FASE_GIORNALIERO, giorno, giorno
 
     async def _async_update_data(self) -> dict:
         if self._background_task and not self._background_task.done():
@@ -291,57 +343,29 @@ class DuretiCoordinator(DataUpdateCoordinator):
                 }
             )
 
-        # Ciclo (al massimo quante sono le fasi) perché una fase può risultare
-        # già soddisfatta: in quel caso non basta uscire, va marcata come
-        # conclusa e si passa alla successiva. Senza questo, un import fatto
-        # per altre vie - per esempio forzando un ticket con l'azione
-        # recupera_ticket - lascerebbe la fase iniziale eternamente "da fare",
-        # bloccando l'avvio del recupero storico.
-        for _ in range(3):
-            fase, data_da, data_a = self._prossima_richiesta()
-            if fase is None:
-                return await self._con_ultime_date(
-                    self.data or {"stato": "nessuna richiesta necessaria al momento"}
-                )
-
-            chiave = f"{fase}:{data_da.isoformat()}_{data_a.isoformat()}"
-
-            if chiave == self._ultima_richiesta:
-                _LOGGER.debug(
-                    "Periodo %s già richiesto (in questa sessione), nessuna nuova richiesta",
-                    chiave,
-                )
-                return await self._con_ultime_date(
-                    self.data or {"stato": f"periodo {chiave} già richiesto"}
-                )
-
-            # Il controllo sui dati già presenti vale solo per le fasi che
-            # guardano avanti nel tempo. Nel backfill si richiedono periodi
-            # ANTERIORI a quelli già importati: lì il controllo direbbe sempre
-            # "già coperto" e bloccherebbe tutto il recupero storico.
-            if fase != FASE_BACKFILL and await self._periodo_gia_coperto(data_a):
-                if fase == FASE_INIZIALE:
-                    _LOGGER.info(
-                        "Fase iniziale già soddisfatta dai dati presenti (fino al %s): "
-                        "la marco come conclusa e passo al recupero storico",
-                        data_a,
-                    )
-                    self._segna_import_iniziale_fatto()
-                    continue  # rivaluta: ora toccherà al backfill
-
-                _LOGGER.debug(
-                    "Periodo %s già coperto dalle statistiche esistenti: nessuna richiesta",
-                    chiave,
-                )
-                self._ultima_richiesta = chiave
-                return await self._con_ultime_date(
-                    self.data or {"stato": f"periodo {chiave} già coperto dai dati esistenti"}
-                )
-
-            break
-        else:
+        fase, data_da, data_a = self._prossima_richiesta()
+        if fase is None:
             return await self._con_ultime_date(
                 self.data or {"stato": "nessuna richiesta necessaria al momento"}
+            )
+
+        chiave = f"{fase}:{data_da.isoformat()}_{data_a.isoformat()}"
+
+        if chiave == self._ultima_richiesta:
+            _LOGGER.debug(
+                "Periodo %s già richiesto in questa sessione, nessuna nuova richiesta", chiave
+            )
+            return await self._con_ultime_date(
+                self.data or {"stato": f"periodo {chiave} già richiesto"}
+            )
+
+        if await self._periodo_gia_coperto(data_a):
+            _LOGGER.debug(
+                "Periodo %s già coperto dalle statistiche esistenti: nessuna richiesta", chiave
+            )
+            self._ultima_richiesta = chiave
+            return await self._con_ultime_date(
+                self.data or {"stato": f"periodo {chiave} già coperto dai dati esistenti"}
             )
 
         try:
@@ -446,72 +470,6 @@ class DuretiCoordinator(DataUpdateCoordinator):
         nuovi_dati.pop(CONF_PENDING_DATA_A, None)
         nuovi_dati.pop(CONF_PENDING_IS_BACKFILL, None)
         self.hass.config_entries.async_update_entry(self._entry, data=nuovi_dati)
-
-    def _avanza_fase(self, fase: str, data_da: date, data_a: date, risultati: dict) -> None:
-        """Aggiorna lo stato persistente dopo un import riuscito.
-
-        La fase manuale (azione recupera_ticket) non fa avanzare nulla: i dati
-        vengono importati ma la pianificazione automatica prosegue come se
-        l'utente non fosse intervenuto.
-        """
-        if fase == FASE_MANUALE:
-            # L'import manuale non decide le fasi, ma i dati che ha portato
-            # possono averne soddisfatta una: rivalutiamo subito, invece di
-            # aspettare il ciclo successivo (24 ore).
-            self.hass.async_create_task(self.async_request_refresh())
-            return
-
-        nuovi_dati = dict(self._entry.data)
-
-        if fase == FASE_INIZIALE:
-            nuovi_dati[CONF_IMPORT_INIZIALE_FATTO] = True
-            _LOGGER.info(
-                "Import iniziale completato (%s - %s): passo al recupero storico a ritroso",
-                data_da,
-                data_a,
-            )
-
-        elif fase == FASE_BACKFILL:
-            # Il blocco successivo finisce il giorno prima dell'inizio di questo.
-            nuovi_dati[CONF_IMPORT_INIZIALE_FATTO] = True
-            punti_totali = sum(len(r.punti) for r in risultati.values())
-            blocchi_fatti = int(self._entry.data.get(CONF_BLOCCHI_BACKFILL_FATTI, 0)) + 1
-            nuovi_dati[CONF_BLOCCHI_BACKFILL_FATTI] = blocchi_fatti
-
-            if punti_totali == 0:
-                nuovi_dati[CONF_BACKFILL_COMPLETATO] = True
-                _LOGGER.info(
-                    "Recupero storico terminato: il blocco %s - %s non contiene dati, "
-                    "presumibilmente si è raggiunto l'inizio dello storico disponibile",
-                    data_da,
-                    data_a,
-                )
-            elif blocchi_fatti >= MAX_BLOCCHI_BACKFILL:
-                nuovi_dati[CONF_BACKFILL_COMPLETATO] = True
-                _LOGGER.info(
-                    "Recupero storico interrotto dopo %d blocchi (limite massimo): "
-                    "ultimo periodo importato %s - %s",
-                    blocchi_fatti,
-                    data_da,
-                    data_a,
-                )
-            else:
-                prossima_fine = data_da - timedelta(days=1)
-                nuovi_dati[CONF_BACKFILL_PROSSIMA_FINE] = prossima_fine.isoformat()
-                _LOGGER.info(
-                    "Blocco storico %s - %s importato (%d punti): il prossimo arriverà "
-                    "fino al %s",
-                    data_da,
-                    data_a,
-                    punti_totali,
-                    prossima_fine,
-                )
-                # Il backfill non deve aspettare 24 ore tra un blocco e
-                # l'altro: chiediamo subito il successivo.
-                self.hass.async_create_task(self.async_request_refresh())
-
-        if nuovi_dati != dict(self._entry.data):
-            self.hass.config_entries.async_update_entry(self._entry, data=nuovi_dati)
 
     async def _poll_and_import(
         self, ticket: str, data_da: date, data_a: date, fase: str
@@ -642,8 +600,6 @@ class DuretiCoordinator(DataUpdateCoordinator):
             )
             self.async_set_updated_data(dati)
             return
-
-        self._avanza_fase(fase, data_da, data_a, risultati)
 
         self.pending_since = None
         self.pending_ticket = None

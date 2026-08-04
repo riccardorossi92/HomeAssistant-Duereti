@@ -98,7 +98,7 @@ class DuretiUltimoImportSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
         return {}
 
 
-class DuretiUltimaDataDisponibileSensor(CoordinatorEntity, SensorEntity):
+class DuretiUltimaDataDisponibileSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
     """Mostra l'ultima data per cui sono realmente arrivati dati curva per un POD.
 
     A differenza di 'Duereti - Ultimo import' (che riflette solo quando è
@@ -117,15 +117,31 @@ class DuretiUltimaDataDisponibileSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_{pod}_ultima_data_disponibile"
         self._attr_name = "Ultima data disponibile"
         self._attr_device_info = _device_info_pod(entry, pod)
+        self._ripristinato: date | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Recupera l'ultimo valore noto dopo un riavvio.
+
+        I dati del coordinator vivono in memoria: dopo un riavvio restano
+        vuoti finché non gira un ciclo che li ripopola, e senza ripristino il
+        sensore mostrerebbe "Sconosciuto" pur avendo statistiche valide nel
+        database.
+        """
+        await super().async_added_to_hass()
+        ultimo_stato = await self.async_get_last_state()
+        if ultimo_stato and ultimo_stato.state not in (None, "unknown", "unavailable"):
+            try:
+                self._ripristinato = date.fromisoformat(ultimo_stato.state)
+            except ValueError:
+                self._ripristinato = None
 
     @property
     def native_value(self) -> date | None:
-        if not self.coordinator.data:
-            return None
-        valore = self.coordinator.data.get("ultime_date_per_pod", {}).get(self._pod)
-        if valore is None:
-            return None
-        return date.fromisoformat(valore)
+        if self.coordinator.data:
+            valore = self.coordinator.data.get("ultime_date_per_pod", {}).get(self._pod)
+            if valore is not None:
+                return date.fromisoformat(valore)
+        return self._ripristinato
 
 
 class DuretiConsumoPeriodoSensor(CoordinatorEntity, RestoreEntity, SensorEntity):

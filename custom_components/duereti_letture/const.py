@@ -6,24 +6,19 @@ CONF_CLIENT_ID = "client_id"
 CONF_SECRET_ID = "secret_id"
 CONF_PODS = "pods"  # lista di dict: {"pod": "IT001...", "df": "RSSMRA..."} - df = dato fiscale (CF o P.IVA)
 CONF_MODE = "mode"  # "CURVE" o "LETTURE"
-CONF_BACKFILL_DONE = "backfill_done"  # legacy, mantenuto per non rompere entry esistenti
+# Data (ISO) del giorno in cui l'integrazione è stata configurata. Al primo
+# avvio non si richiedono dati: ci si limita a validare le credenziali, e le
+# richieste giornaliere partono dal giorno successivo.
+CONF_DATA_INSTALLAZIONE = "data_installazione"
 
-# Stato della nuova pianificazione (vedi coordinator._prossima_richiesta)
-CONF_IMPORT_INIZIALE_FATTO = "import_iniziale_fatto"
-CONF_BACKFILL_COMPLETATO = "backfill_completato"
-# Data di FINE del prossimo blocco di backfill: si procede a ritroso, quindi
-# dopo ogni blocco riuscito questa diventa il giorno prima del suo inizio.
-CONF_BACKFILL_PROSSIMA_FINE = "backfill_prossima_fine"
-CONF_BLOCCHI_BACKFILL_FATTI = "blocchi_backfill_fatti"
+# I dati di un giorno risultano disponibili il giorno successivo: verificato
+# sul campo (richiesta del 3 agosto fatta la mattina del 4, file pronto alle
+# 15 dello stesso 4 agosto).
+RITARDO_DATI_GIORNI = 1
 
-# I dati di un giorno risultano disponibili con un paio di giorni di ritardo:
-# verificato empiricamente (il 3 agosto erano disponibili quelli del 1 agosto).
-RITARDO_DATI_GIORNI = 2
-
-# Quanti blocchi di backfill al massimo richiedere prima di fermarsi comunque.
-# Serve a non insistere all'infinito se Duereti restituisce sempre qualcosa:
-# 6 blocchi da 6 mesi = 3 anni di storico, ampiamente oltre il necessario.
-MAX_BLOCCHI_BACKFILL = 6
+# Prima di quest'ora (locale) non si chiede nulla: i dati del giorno
+# precedente non sono ancora pronti a inizio mattinata.
+ORA_MINIMA_RICHIESTA = 10
 
 # Ticket requestExport in sospeso, salvato sulla config entry (sopravvive ai
 # reload/riavvii) così un reload non perde di vista un ticket già ottenuto
@@ -69,7 +64,7 @@ RESULT_POLL_MAX_ATTEMPTS = 12  # ~6 ore totali di attesa massima
 # rifare la stessa richiesta più volte per lo stesso mese. Un controllo
 # giornaliero va bene: se il mese è già stato importato, il coordinator
 # non rifà comunque la chiamata.
-DEFAULT_SCAN_INTERVAL_HOURS = 24
+DEFAULT_SCAN_INTERVAL_HOURS = 1
 
 ESITO_OK = 0
 ESITO_ERRORE = 1
