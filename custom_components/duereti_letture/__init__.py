@@ -8,10 +8,9 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
-from .api import DuretiApiError, DuretiAuthError
 from .const import CONF_CLIENT_ID, CONF_PODS, CONF_SECRET_ID, DOMAIN
 from .coordinator import DuretiCoordinator
 
@@ -98,16 +97,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         pods=entry.data[CONF_PODS],
     )
 
-    # Il setup dipende SOLO dalla capacità di autenticarsi. Il recupero dei
-    # dati (requestExport/requestResult) è un'operazione lunga e soggetta ai
-    # blocchi intermittenti del WAF Duereti: un suo fallimento deve marcare
-    # come fallito il singolo aggiornamento, non l'intera integrazione.
-    try:
-        await coordinator.api.async_validate_credentials()
-    except DuretiAuthError as err:
-        raise ConfigEntryAuthFailed(f"Credenziali Duereti non valide: {err}") from err
-    except DuretiApiError as err:
-        raise ConfigEntryNotReady(f"Impossibile contattare le API Duereti: {err}") from err
+    # Il setup di una entry già configurata non fa chiamate di rete e non può
+    # fallire. Le credenziali sono già state validate quando la si è aggiunta:
+    # rivalidarle qui significherebbe che un blocco intermittente del WAF, su
+    # una qualunque delle chiamate requestToken fatte ad ogni riavvio, manda in
+    # "Configurazione non riuscita" l'intera integrazione e non crea nessuna
+    # entità. Gli errori di autenticazione o di rete emergono dal coordinator:
+    # DuretiAuthError diventa ConfigEntryAuthFailed (Home Assistant chiede di
+    # reinserire le credenziali), tutto il resto è un aggiornamento fallito.
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 

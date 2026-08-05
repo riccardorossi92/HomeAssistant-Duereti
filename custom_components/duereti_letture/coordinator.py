@@ -110,6 +110,10 @@ class DuretiCoordinator(DataUpdateCoordinator):
         self._ultima_richiesta: str | None = None  # chiave del periodo già richiesto
         self.pending_since: datetime | None = None  # per il sensore di stato/attesa
         self.pending_ticket: str | None = None
+        # True finché requestToken funziona. Distingue un problema di
+        # account da un problema di recupero dati: le entità del
+        # dispositivo "Account API" si basano su questo.
+        self.token_ok: bool = True
 
         # Se la entry viene smontata (reload, riavvio, rimozione) mentre il
         # polling in background è a metà, lo cancelliamo invece di lasciarlo
@@ -367,6 +371,19 @@ class DuretiCoordinator(DataUpdateCoordinator):
             return await self._con_ultime_date(
                 self.data or {"stato": f"periodo {chiave} già coperto dai dati esistenti"}
             )
+
+        # Prima la chiamata di autenticazione: il suo esito determina lo stato
+        # del dispositivo "Account API", distinto da quello dei POD.
+        try:
+            await self.api.async_assicura_token()
+        except DuretiAuthError as err:
+            self.token_ok = False
+            raise ConfigEntryAuthFailed(f"Credenziali non valide: {err}") from err
+        except DuretiApiError as err:
+            self.token_ok = False
+            raise UpdateFailed(f"Errore chiamando requestToken: {err}") from err
+        else:
+            self.token_ok = True
 
         try:
             ticket = await self.api.request_export(data_da, data_a, self._pods, mode=MODE_CURVE)

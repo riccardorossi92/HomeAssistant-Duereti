@@ -68,21 +68,16 @@ class DuretiUltimoImportSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        """Sempre disponibile finché l'integrazione è caricata.
+        """Disponibile finché l'autenticazione funziona.
 
         È un'entità del dispositivo "Account API", che rappresenta lo stato
-        della connessione a Duereti, non dei dati di un POD. Un fallimento nel
-        recupero dei dati (requestExport/requestResult bloccati dal WAF, file
-        non pronto, ecc.) riguarda il POD e non deve far sparire anche questa,
-        che è proprio dove si legge cosa è andato storto: gli attributi
-        `stato` e `ultimo_errore` restano così consultabili.
-
-        Se invece a fallire è l'autenticazione, il coordinator solleva
-        ConfigEntryAuthFailed: HA marca l'intera entry come da riautenticare
-        e le entità diventano comunque indisponibili, che è il comportamento
-        voluto per un problema di account.
+        della connessione a Duereti, non i dati di un POD: dipende quindi
+        dall'esito di requestToken, non da quello del recupero dati. Se a
+        fallire è requestExport o requestResult (WAF, file non pronto, ecc.)
+        questa entità resta disponibile, ed è proprio dove si leggono gli
+        attributi `stato` e `ultimo_errore` per capire cosa è andato storto.
         """
-        return True
+        return getattr(self.coordinator, "token_ok", True)
 
     async def async_added_to_hass(self) -> None:
         """Recupera l'ultimo valore noto dopo un riavvio.

@@ -156,6 +156,15 @@ class DuretiApiClient:
         self._token: str | None = None
         self._token_expiry: float = 0.0
 
+    async def async_assicura_token(self) -> None:
+        """Si assicura di avere un token valido, riusando quello in cache.
+
+        A differenza di async_validate_credentials non forza il rinnovo: serve
+        al coordinator per sapere se la prima chiamata (requestToken) funziona,
+        senza sprecare richieste verso un'API che le blocca a intermittenza.
+        """
+        await self._get_token()
+
     async def async_validate_credentials(self) -> None:
         """Verifica che Client ID/Secret ID siano validi.
 
