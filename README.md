@@ -82,8 +82,10 @@ I dati di un giorno risultano disponibili presso Duereti il **giorno
 successivo** (verificato sul campo: la richiesta del 3 agosto, inviata la
 mattina del 4, è stata evasa alle 15 dello stesso giorno).
 
-- **Il giorno dell'installazione non viene richiesto nulla:** il setup si
-  limita a validare le credenziali con `requestToken`.
+- **Al primo avvio viene richiesto subito il giorno precedente,** senza
+  attendere le 10:00: serve a verificare da subito che POD e dato fiscale
+  siano validi. Se non lo sono, l'errore emerge ora invece che il giorno dopo,
+  e riguarda le entità del POD, non quelle dell'account.
 - **Dal giorno successivo, dopo le 10:00,** viene richiesto il giorno
   precedente. Il controllo gira ogni ora, ma quasi sempre non fa nulla ed
   esce subito: serve solo a intercettare la finestra delle 10:00
