@@ -158,6 +158,146 @@ Le date sono solo un'etichetta per i sensori diagnostici: i dati importati
 arrivano interamente dal file. `entry_id` serve solo con più istanze
 configurate.
 
+
+## Comuni serviti da Duereti
+<details>
+<summary>Provincia di Milano</summary>
+- Abbiategrasso
+- Albairate
+- Arconate
+- Arese
+- Arluno
+- Assago
+- Bareggio
+- Basiglio
+- Bellinzago Lombardo
+- Bernate Ticino
+- Besate
+- Binasco
+- Boffalora sopra Ticino
+- Bubbiano
+- Buccinasco
+- Buscate
+- Bussero
+- Busto Garolfo
+- Calvignasco
+- Canegrate
+- Carpiano
+- Casarile
+- Casorezzo
+- Cassano d'Adda
+- Cassina de' Pecchi
+- Cassinetta di Lugagnano
+- Castano Primo
+- Cernusco sul Naviglio
+- Cerro al Lambro
+- Cerro Maggiore
+- Cesano Boscone
+- Cisliano
+- Colturano
+- Corbetta
+- Cornaredo
+- Corsico
+- Cuggiono
+- Cusago
+- Dairago
+- Dresano
+- Gaggiano
+- Garbagnate Milanese
+- Gessate
+- Gorgonzola
+- Gudo Visconti
+- Inveruno
+- Inzago
+- Lacchiarella
+- Lainate
+- Legnano
+- Liscate
+- Locate di Triulzi
+- Magenta
+- Magnago
+- Marcallo con Casone
+- Masate
+- Mediglia
+- Melegnano
+- Melzo
+- Mesero
+- Morimondo
+- Motta Visconti
+- Nerviano
+- Nosate
+- Noviglio
+- Opera
+- Ossona
+- Ozzero
+- Pantigliate
+- Parabiago
+- Paullo
+- Pero
+- Peschiera Borromeo
+- Pessano con Bornago
+- Pieve Emanuele
+- Pioltello
+- Pogliano Milanese
+- Pozzo d'Adda
+- Pozzuolo Martesana
+- Pregnana Milanese
+- Rescaldina
+- Rho
+- Robecchetto con Induno
+- Robecco sul Naviglio
+- Rodano
+- Rosate
+- San Donato Milanese
+- San Giorgio su Legnano
+- San Giuliano Milanese
+- San Vittore Olona
+- San Zenone al Lambro
+- Santo Stefano Ticino
+- Sedriano
+- Segrate
+- Settala
+- Settimo Milanese
+- Trezzano sul Naviglio
+- Tribiano
+- Truccazzano
+- Turbigo
+- Vanzaghello
+- Vanzago
+- Vaprio d'Adda
+- Vermezzo con Zelo
+- Vernate
+- Vignate
+- Villa Cortese
+- Vimodrone
+- Vittuone
+- Vizzolo Predabissi
+- Zibido San Giacomo
+</details>
+
+<details>
+<summary>Val Trompia</summary>
+- Bovegno
+- Bovezzo
+- Brione
+- Caino
+- Collio
+- Concesio
+- Gardone Val Trompia
+- Irma
+- Lodrino
+- Lumezzane
+- Marcheno
+- Marmentino
+- Nave
+- Pezzaze
+- Polaveno
+- Sarezzo
+- Tavernole sul Mella
+- Villa Carcina
+</details>
+
+
 ## Note tecniche / limiti noti
 
 - Il token Duereti dura 10 minuti: viene rinnovato automaticamente quando
