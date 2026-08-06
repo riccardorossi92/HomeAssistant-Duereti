@@ -15,6 +15,10 @@ CONF_DATA_INSTALLAZIONE = "data_installazione"
 # 15 dello stesso 4 agosto).
 RITARDO_DATI_GIORNI = 1
 
+# Attesa suggerita all'utente quando il blocco riguarda l'autenticazione:
+# in quel caso il problema è generalizzato e non serve riprovare subito.
+MINUTI_ATTESA_SUGGERITI = 10
+
 # Prima di quest'ora (locale) non si chiede nulla: i dati del giorno
 # precedente non sono ancora pronti a inizio mattinata.
 ORA_MINIMA_RICHIESTA = 10

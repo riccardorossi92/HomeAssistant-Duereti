@@ -16,7 +16,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .api import DuretiApiClient, DuretiApiError, DuretiAuthError, DuretiNotFoundError
+from .api import (
+    DuretiApiClient,
+    DuretiApiError,
+    DuretiAuthError,
+    DuretiNotFoundError,
+    descrivi_errore,
+)
 from .const import (
     CONF_DATA_INSTALLAZIONE,
     CONF_PENDING_DATA_A,
@@ -26,6 +32,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL_HOURS,
     DOMAIN,
     MAX_DATE_RANGE_MONTHS,
+    MINUTI_ATTESA_SUGGERITI,
     MODE_CURVE,
     ORA_MINIMA_RICHIESTA,
     RITARDO_DATI_GIORNI,
@@ -231,11 +238,35 @@ class DuretiCoordinator(DataUpdateCoordinator):
 
         _LOGGER.info("Recupero storico avviato manualmente: %s - %s", data_da, data_a)
 
+        # Le due chiamate vengono fatte separatamente per poter distinguere il
+        # tipo di problema nel messaggio d'errore: un blocco su requestToken
+        # riguarda l'accesso in generale (conviene aspettare), uno su
+        # requestExport riguarda questa specifica richiesta (conviene cambiare
+        # il periodo). Nessun tentativo automatico: l'azione è manuale, decide
+        # l'utente se e quando riprovare.
+        try:
+            await self.api.async_assicura_token()
+        except DuretiAuthError as err:
+            self.token_ok = False
+            raise HomeAssistantError(
+                f"Credenziali non valide: {descrivi_errore(err)}"
+            ) from err
+        except DuretiApiError as err:
+            self.token_ok = False
+            raise HomeAssistantError(
+                f"Non è stato possibile autenticarsi su Duereti: {descrivi_errore(err)}. "
+                f"Riprova tra {MINUTI_ATTESA_SUGGERITI} minuti."
+            ) from err
+        else:
+            self.token_ok = True
+
         try:
             ticket = await self.api.request_export(data_da, data_a, self._pods, mode=MODE_CURVE)
         except DuretiApiError as err:
             raise HomeAssistantError(
-                f"Duereti non ha accettato la richiesta per {data_da} - {data_a}: {err}"
+                f"Duereti non ha accettato la richiesta per il periodo {data_da} - {data_a}: "
+                f"{descrivi_errore(err)}. L'autenticazione funziona, quindi il problema "
+                "riguarda questa richiesta: riprova cambiando le date."
             ) from err
 
         self.pending_since = dt_util.utcnow()
@@ -269,9 +300,11 @@ class DuretiCoordinator(DataUpdateCoordinator):
     def _prossima_richiesta(self) -> tuple[str | None, date, date]:
         """Decide se c'è qualcosa da chiedere a Duereti in questo ciclo.
 
-        - Il giorno stesso dell'installazione non si richiede nulla: il setup
-          si limita a validare le credenziali con requestToken.
-        - Dal giorno successivo, e solo dopo ORA_MINIMA_RICHIESTA, si chiede
+        - Al primo avvio dopo l'installazione si chiede subito il giorno
+          precedente, senza attendere ORA_MINIMA_RICHIESTA: serve a verificare
+          da subito che POD e dato fiscale siano validi, perché un errore
+          emergerebbe altrimenti solo il giorno dopo.
+        - Dai giorni successivi, e solo dopo ORA_MINIMA_RICHIESTA, si chiede
           il giorno oggi-RITARDO_DATI_GIORNI.
 
         Il recupero dello storico non è automatico: si avvia a mano con
@@ -283,22 +316,26 @@ class DuretiCoordinator(DataUpdateCoordinator):
         oggi = date.today()
         installazione = self._entry.data.get(CONF_DATA_INSTALLAZIONE)
 
+        giorno = oggi - timedelta(days=RITARDO_DATI_GIORNI)
+
         if not installazione:
+            # Primo avvio: chiediamo subito il giorno precedente, senza
+            # aspettare le 10:00 né il giorno dopo. Serve a verificare da
+            # subito che POD e dato fiscale siano corretti: se non lo sono,
+            # requestExport risponde con un errore di validazione e il
+            # problema emerge ora invece che il giorno seguente.
             self.hass.config_entries.async_update_entry(
                 self._entry,
                 data={**self._entry.data, CONF_DATA_INSTALLAZIONE: oggi.isoformat()},
             )
             _LOGGER.info(
-                "Primo avvio: credenziali validate, nessuna richiesta di dati oggi. Le "
-                "richieste giornaliere partiranno da domani dopo le %d:00. Per recuperare "
-                "lo storico usa l'azione duereti_letture.recupera_storico.",
+                "Primo avvio: richiedo i dati del %s per verificare POD e dato fiscale. "
+                "Da domani le richieste partiranno dopo le %d:00; per lo storico usa "
+                "l'azione duereti_letture.recupera_storico.",
+                giorno,
                 ORA_MINIMA_RICHIESTA,
             )
-            return None, oggi, oggi
-
-        if oggi <= date.fromisoformat(installazione):
-            _LOGGER.debug("Giorno dell'installazione: nessuna richiesta di dati")
-            return None, oggi, oggi
+            return FASE_GIORNALIERO, giorno, giorno
 
         adesso = dt_util.now()
         if adesso.hour < ORA_MINIMA_RICHIESTA:
@@ -310,7 +347,6 @@ class DuretiCoordinator(DataUpdateCoordinator):
             )
             return None, oggi, oggi
 
-        giorno = oggi - timedelta(days=RITARDO_DATI_GIORNI)
         return FASE_GIORNALIERO, giorno, giorno
 
     async def _async_update_data(self) -> dict:

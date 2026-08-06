@@ -60,6 +60,25 @@ def _sanitizza(dati: dict | None) -> dict:
     }
 
 
+def descrivi_errore(err: Exception) -> str:
+    """Rende leggibile un errore delle API, in particolare il blocco del WAF.
+
+    Quando il WAF (F5 BIG-IP) rifiuta una richiesta restituisce una pagina
+    HTML al posto del JSON: mostrarla intera all'utente è inutile e
+    incomprensibile. Ne estraiamo il solo Support ID, che è l'unica
+    informazione utile (serve a Duereti per rintracciare il blocco nei log).
+    """
+    testo = str(err)
+    if "Request Rejected" not in testo:
+        return testo
+    match = re.search(r"support ID is:\s*(\d+)", testo, re.IGNORECASE)
+    support_id = match.group(1) if match else "non disponibile"
+    return (
+        "richiesta rifiutata dal WAF di Duereti (blocco intermittente, non dipende "
+        f"dalle credenziali). Support ID: {support_id}"
+    )
+
+
 def _log_richiesta(url: str, body: dict | None, headers: dict | None) -> None:
     """Logga la richiesta in uscita (solo a livello DEBUG).
 
