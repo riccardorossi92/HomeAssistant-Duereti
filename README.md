@@ -10,9 +10,9 @@ Unofficial integration for Duereti electricity distributor data in Home Assistan
 Custom integration for Home Assistant to import electricity meter curve data from Duereti (Italian electricity distributor) through their public PCF API.
 
 Integrazione per Home Assistant che scarica automaticamente le curve di
-scambio/produzione (o le letture) del tuo POD da Duereti tramite le API
-pubbliche del Portale Clienti Finali (PCF), e le importa come statistiche
-esterne (visibili anche nella Energy Dashboard).
+consumo elettrico del tuo POD da Duereti tramite le API pubbliche del Portale
+Clienti Finali (PCF), e le importa come statistiche esterne (visibili anche
+nella Energy Dashboard).
 
 > ✅ **Formato CURVE confermato.** `parse_curve_zip` (in `api.py`) è stato
 > validato su un export reale (CSV `;`-separato con colonne `POD`, `DATA`,
@@ -313,8 +313,9 @@ configurate.
   di Home Assistant sono orarie
 - Ad ogni import la serie esistente viene riletta, fusa con i nuovi dati e le
   somme progressive ricalcolate da zero. Costa qualche migliaio di righe
-  lette per volta, ma rende irrilevante l'ordine di inserimento: senza,
-  il recupero storico a ritroso sarebbe impossibile (la somma è cumulativa)
+  lette per volta, ma rende irrilevante l'ordine di inserimento: senza, non
+  si potrebbero importare periodi anteriori ai dati già presenti, perché la
+  somma è cumulativa e i punti successivi resterebbero incoerenti
 
 ### Il blocco intermittente del WAF
 
