@@ -4,7 +4,7 @@ Unofficial integration for Duereti electricity distributor data in Home Assistan
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge)](https://hacs.xyz/)
 [![GitHub Release](https://img.shields.io/github/v/release/riccardorossi92/HomeAssistant-Duereti.svg?style=for-the-badge&color=blue)](https://github.com/riccardorossi92/HomeAssistant-Duereti/releases)
-[![Integration Usage](https://img.shields.io/badge/dynamic/json?color=41BDF5&style=for-the-badge&logo=home-assistant&label=usage&suffix=%20installs&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$['HomeAssistant-Duereti'].total)](https://analytics.home-assistant.io/)
+[![Integration Usage](https://img.shields.io/badge/dynamic/json?color=41BDF5&style=for-the-badge&logo=home-assistant&label=usage&suffix=%20installs&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$['duereti_letture'].total)](https://analytics.home-assistant.io/)
 
 > **Disclaimer:**  This is an unofficial integration and is not affiliated with or endorsed by Duereti in any way.
 Custom integration for Home Assistant to import electricity meter curve data from Duereti (Italian electricity distributor) through their public PCF API.
