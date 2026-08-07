@@ -1,24 +1,16 @@
 # HomeAssistant-Duereti
 
-Unofficial integration for Duereti electricity distributor data in Home Assistant
+> **Disclaimer:**  This is an unofficial integration and is not affiliated with or endorsed by Duereti in any way.
+Custom integration for Home Assistant to import electricity meter curve data from Duereti (Italian electricity distributor) through their public PCF API.
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge)](https://hacs.xyz/)
 [![GitHub Release](https://img.shields.io/github/v/release/riccardorossi92/HomeAssistant-Duereti.svg?style=for-the-badge&color=blue)](https://github.com/riccardorossi92/HomeAssistant-Duereti/releases)
 [![Integration Usage](https://img.shields.io/badge/dynamic/json?color=41BDF5&style=for-the-badge&logo=home-assistant&label=usage&suffix=%20installs&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$['duereti_letture'].total)](https://analytics.home-assistant.io/)
 
-> **Disclaimer:**  This is an unofficial integration and is not affiliated with or endorsed by Duereti in any way.
-Custom integration for Home Assistant to import electricity meter curve data from Duereti (Italian electricity distributor) through their public PCF API.
-
 Integrazione per Home Assistant che scarica automaticamente le curve di
 consumo elettrico del tuo POD da Duereti tramite le API pubbliche del Portale
 Clienti Finali (PCF), e le importa come statistiche esterne (visibili anche
 nella Energy Dashboard).
-
-> ✅ **Formato CURVE confermato.** `parse_curve_zip` (in `api.py`) è stato
-> validato su un export reale (CSV `;`-separato con colonne `POD`, `DATA`,
-> `ORA`, `ATTIVA_PRELEVATA`, ecc., timestamp a intervalli di 15 minuti,
-> decimali con virgola). Il parser LETTURE (`parse_letture_zip`) è anch'esso
-> confermato ma resta solo di riferimento, dato che l'integrazione usa CURVE.
 
 ## Prerequisiti: richiedere Client ID e Secret ID a Duereti
 
@@ -309,6 +301,10 @@ configurate.
   decimali con virgola, timestamp a intervalli di 15 minuti. Viene importato
   solo `ATTIVA_PRELEVATA` (consumo); `ATTIVA_IMMESSA` (produzione, es.
   fotovoltaico) non è ancora gestita
+- L'integrazione usa solo `mode=CURVE`. Esiste anche un parser per le letture
+  (`parse_letture_zip`), validato su un file reale ma non collegato
+  all'integrazione: `mode=LETTURE` restituisce solo una fotografia cumulativa
+  a fine periodo, non l'andamento nel tempo
 - I quarti d'ora vengono **aggregati per ora**, perché le external statistics
   di Home Assistant sono orarie
 - Ad ogni import la serie esistente viene riletta, fusa con i nuovi dati e le
